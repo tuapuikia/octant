@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -12,18 +12,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vmware-tanzu/octant/pkg/action"
+
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	restclient "k8s.io/client-go/rest"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/pkg/store"
+	internalLog "github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/util/kubernetes"
+	"github.com/vmware-tanzu/octant/pkg/log"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
-//go:generate mockgen -source=service.go -destination=./fake/mock_interface.go -package=fake github.com/vmware/octant/internal/portforward PortForwarder
+//go:generate mockgen -source=service.go -destination=./fake/mock_interface.go -package=fake github.com/vmware-tanzu/octant/internal/portforward PortForwarder
 
 var (
 	emptyPortForwardResponse = CreateResponse{}
@@ -31,10 +36,11 @@ var (
 
 // PortForwarder allows querying active port-forwards
 type PortForwarder interface {
-	List() []State
+	List(ctx context.Context) []State
 	Get(id string) (State, bool)
-	Create(ctx context.Context, gvk schema.GroupVersionKind, name string, namespace string, remotePort uint16) (CreateResponse, error)
-	Find(namespace string, gvk schema.GroupVersionKind, name string) (State, error)
+	Create(ctx context.Context, alerter action.Alerter, gvk schema.GroupVersionKind, name string, namespace string, remotePort uint16) (CreateResponse, error)
+	FindTarget(namespace string, gvk schema.GroupVersionKind, name string) ([]State, error)
+	FindPod(namespace string, gvk schema.GroupVersionKind, name string) ([]State, error)
 	Stop()
 	StopForwarder(id string)
 }
@@ -45,14 +51,11 @@ type PortForwardPortSpec struct {
 	Local  uint16 `json:"local,omitempty"`
 }
 
-// PortForwardSpec describes a port forward.
-// TODO Merge with PortForwardState
-type PortForwardSpec struct {
-	ID        string                `json:"id"`
-	Status    string                `json:"status"`
-	Message   string                `json:"message"`
-	Ports     []PortForwardPortSpec `json:"ports"`
-	CreatedAt time.Time             `json:"createdAt"`
+// CreateResponse describes a port forward.
+// TODO Merge with State (GH#498)
+type CreateResponse struct {
+	ID    string                `json:"id"`
+	Ports []PortForwardPortSpec `json:"ports"`
 }
 
 type CreateRequest struct {
@@ -62,8 +65,6 @@ type CreateRequest struct {
 	Name       string                `json:"name"`
 	Ports      []PortForwardPortSpec `json:"ports"`
 }
-
-type CreateResponse PortForwardSpec
 
 // Target references a kubernetes object
 type Target struct {
@@ -81,6 +82,7 @@ type State struct {
 	Pod       Target
 
 	cancel context.CancelFunc
+	ctx    context.Context
 }
 
 // Clone clones a port forward state.
@@ -92,6 +94,7 @@ func (pf *State) Clone() State {
 		Target:    pf.Target,
 		Pod:       pf.Pod,
 		cancel:    pf.cancel,
+		ctx:       pf.ctx,
 	}
 	copy(pfCpy.Ports, pf.Ports)
 	return pfCpy
@@ -103,7 +106,7 @@ type States struct {
 	portForwards map[string]State
 }
 
-// PortForwardSvcOptions contains all the options for running a port-forward service
+// ServiceOptions contains all the options for running a port-forward service
 type ServiceOptions struct {
 	RESTClient    rest.Interface
 	Config        *restclient.Config
@@ -126,13 +129,14 @@ type Service struct {
 	state    States
 }
 
+// Check that struct satisfies interface
 var _ PortForwarder = (*Service)(nil)
 
 // New creates an instance of Service.
-func New(ctx context.Context, opts ServiceOptions, logger log.Logger) *Service {
+func New(ctx context.Context, opts ServiceOptions) *Service {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Service{
-		logger:   logger,
+		logger:   internalLog.From(ctx),
 		opts:     opts,
 		notifyCh: make(chan forwarderEvent, 32),
 		ctx:      ctx,
@@ -145,7 +149,7 @@ func New(ctx context.Context, opts ServiceOptions, logger log.Logger) *Service {
 
 // Stop stops all forwarders. The portForwardService is invalid after calling stop.
 func (s *Service) Stop() {
-	// TODO wait on goroutines to complete after calling cancel.
+	// TODO wait on goroutines to complete after calling cancel. (GH#494)
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -159,8 +163,8 @@ func (s *Service) validateCreateRequest(r CreateRequest) error {
 		return errors.New("name field required")
 	}
 
-	if r.APIVersion != "v1" || r.Kind != "Pod" {
-		return errors.Errorf("port forwards only work with pods")
+	if r.APIVersion != "v1" || (r.Kind != "Pod" && r.Kind != "Service") {
+		return errors.Errorf("port forwards only work with pods & services")
 	}
 
 	for _, p := range r.Ports {
@@ -189,10 +193,64 @@ func (s *Service) resolvePod(ctx context.Context, r CreateRequest) (string, erro
 			return "", errors.Errorf("verifying pod %q: %v", r.Name, err)
 		}
 		return r.Name, nil
+	case r.APIVersion == "v1" && r.Kind == "Service":
+		pod, err := s.findPodForService(ctx, r.APIVersion, r.Kind, r.Namespace, r.Name)
+		if err != nil {
+			return "", err
+		}
+
+		return pod.Name, nil
 	default:
 		return "", errors.New("not implemented")
 	}
 
+}
+
+func (s *Service) findPodForService(ctx context.Context, apiVersion, kind, namespace, name string) (*corev1.Pod, error) {
+	o := s.opts.ObjectStore
+	if o == nil {
+		return nil, errors.New("nil objectstore")
+	}
+
+	key := store.Key{
+		APIVersion: apiVersion,
+		Kind:       kind,
+		Namespace:  namespace,
+		Name:       name,
+	}
+	var service corev1.Service
+	found, err := store.GetAs(ctx, o, key, &service)
+
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+
+	lbls := labels.Set(service.Spec.Selector)
+	key = store.Key{
+		APIVersion: apiVersion,
+		Kind:       "Pod",
+		Namespace:  namespace,
+		Selector:   &lbls,
+	}
+	list, _, err := o.List(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range list.Items {
+		pod := &corev1.Pod{}
+
+		if err := kubernetes.FromUnstructured(&list.Items[i], pod); err != nil {
+			return nil, err
+		}
+
+		return pod, nil
+	}
+
+	return nil, errors.New("no matching pod found for service")
 }
 
 // verifyPod returns true if the specified pod can be found and is in the running phase.
@@ -210,9 +268,14 @@ func (s *Service) verifyPod(ctx context.Context, namespace, name string) (bool, 
 		Name:       name,
 	}
 	var pod corev1.Pod
-	if err := store.GetAs(ctx, o, key, &pod); err != nil {
+	found, err := store.GetAs(ctx, o, key, &pod)
+	if err != nil {
 		return false, err
 	}
+	if !found {
+		return false, nil
+	}
+
 	if pod.Name == "" {
 		return false, errors.New("pod not found")
 	}
@@ -227,7 +290,7 @@ func (s *Service) verifyPod(ctx context.Context, namespace, name string) (bool, 
 // createForwarder creates a port forwarder, forwards traffic, and blocks until
 // port state information is populated.
 // Returns forwarder id.
-func (s *Service) createForwarder(r CreateRequest) (string, error) {
+func (s *Service) createForwarder(alerter action.Alerter, targetRequest, podRequest CreateRequest) (string, error) {
 	logger := s.logger.With("context", "PortForwardService.createForwarder")
 
 	if s.opts.PortForwarder == nil {
@@ -242,16 +305,23 @@ func (s *Service) createForwarder(r CreateRequest) (string, error) {
 	logger = logger.With("id", forwarderID)
 
 	var ports []string
-	for _, p := range r.Ports {
+	for _, p := range podRequest.Ports {
 		ports = append(ports, fmt.Sprintf("%d:%d", p.Local, p.Remote))
 	}
 
 	// Target coordinates to preserve in state
-	gv, err := schema.ParseGroupVersion(r.APIVersion)
+	targetGv, err := schema.ParseGroupVersion(targetRequest.APIVersion)
 	if err != nil {
 		return "", errors.Wrap(err, "parsing APIVersion")
 	}
-	gvk := gv.WithKind(r.Kind)
+	targetGvk := targetGv.WithKind(targetRequest.Kind)
+
+	// Pod coordinates to preserve in state
+	podGv, err := schema.ParseGroupVersion(podRequest.APIVersion)
+	if err != nil {
+		return "", errors.Wrap(err, "parsing APIVersion")
+	}
+	podGvk := podGv.WithKind(podRequest.Kind)
 
 	// This child context will be cancelled if our parent context is cancelled
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -259,7 +329,6 @@ func (s *Service) createForwarder(r CreateRequest) (string, error) {
 	// Spawns goroutine to update state as ports become available
 	portsChannel, portsReady := s.localPortsHandler(ctx, forwarderID)
 
-	// TODO resolve request gvk/name to pod name
 	o := &s.opts
 	opts := Options{
 		Config:        o.Config,
@@ -278,17 +347,18 @@ func (s *Service) createForwarder(r CreateRequest) (string, error) {
 		ID:        forwarderID,
 		CreatedAt: time.Now(),
 		Target: Target{
-			GVK:       gvk,
-			Namespace: r.Namespace,
-			Name:      r.Name,
+			GVK:       targetGvk,
+			Namespace: targetRequest.Namespace,
+			Name:      targetRequest.Name,
 		},
-		// TODO Target and Pod may be different
 		Pod: Target{
-			GVK:       gvk,
-			Namespace: r.Namespace,
-			Name:      r.Name,
+			GVK:       podGvk,
+			Namespace: podRequest.Namespace,
+			Name:      podRequest.Name,
 		},
+
 		cancel: cancel,
+		ctx:    ctx,
 	}
 
 	s.state.Lock()
@@ -297,14 +367,14 @@ func (s *Service) createForwarder(r CreateRequest) (string, error) {
 
 	req := o.RESTClient.Post().
 		Resource("pods").
-		Namespace(r.Namespace).
-		Name(r.Name).
+		Namespace(podRequest.Namespace).
+		Name(podRequest.Name).
 		SubResource("portforward")
 
 	go func() {
 		// Blocks until forwarder completes
 		logger.With("url", req.URL()).Debugf("starting port-forward")
-		err := s.opts.PortForwarder.ForwardPorts("POST", req.URL(), opts)
+		err := s.opts.PortForwarder.ForwardPorts(alerter, "POST", req.URL(), opts)
 
 		logger.Debugf("forwarding terminated: %v", err)
 
@@ -344,14 +414,12 @@ func (s *Service) responseForCreate(id string) (CreateResponse, error) {
 	}
 
 	response.ID = id
-	response.CreatedAt = state.CreatedAt
 	rp := make([]PortForwardPortSpec, len(state.Ports))
 	for i := range state.Ports {
 		rp[i].Local = state.Ports[i].Local
 		rp[i].Remote = state.Ports[i].Remote
 	}
 	response.Ports = rp
-	response.Status = "ok"
 	return response, nil
 }
 
@@ -393,12 +461,17 @@ func (s *Service) updatePorts(id string, ports []ForwardedPort) error {
 }
 
 // List lists port forwards
-func (s *Service) List() []State {
+func (s *Service) List(ctx context.Context) []State {
 	s.state.Lock()
 	defer s.state.Unlock()
 
 	result := make([]State, 0, len(s.state.portForwards))
-	for _, pf := range s.state.portForwards {
+	for i, pf := range s.state.portForwards {
+		targetPod := &pf.Pod
+		if verified, err := s.verifyPod(ctx, targetPod.Namespace, targetPod.Name); !verified || err != nil {
+			delete(s.state.portForwards, i)
+			continue
+		}
 		result = append(result, pf.Clone())
 	}
 
@@ -422,7 +495,7 @@ func (s *Service) Get(id string) (State, bool) {
 
 // Create creates a new port forward for the specified object and remote port.
 // Implements PortForwardInterface.
-func (s *Service) Create(ctx context.Context, gvk schema.GroupVersionKind, name string, namespace string, remotePort uint16) (CreateResponse, error) {
+func (s *Service) Create(ctx context.Context, alerter action.Alerter, gvk schema.GroupVersionKind, name string, namespace string, remotePort uint16) (CreateResponse, error) {
 	logger := s.logger.With("context", "PortForwardService.Create")
 	req := newForwardRequest(gvk, name, namespace, remotePort)
 
@@ -444,8 +517,15 @@ func (s *Service) Create(ctx context.Context, gvk schema.GroupVersionKind, name 
 	logger.Debugf("resolved to pod %q", podName)
 	podReq := req
 	podReq.Name = podName
+	podReq.Kind = "Pod"
 
-	id, err := s.createForwarder(req)
+	id, err := s.createForwarder(alerter, req, CreateRequest{
+		Namespace:  req.Namespace,
+		APIVersion: req.APIVersion,
+		Kind:       "Pod",
+		Name:       podName,
+		Ports:      req.Ports,
+	})
 	if err != nil {
 		return emptyPortForwardResponse, errors.Wrap(err, "creating forwarder")
 	}
@@ -470,14 +550,16 @@ func (s *Service) StopForwarder(id string) {
 		return
 	}
 	if pf.cancel != nil {
-		// TODO wait for goroutine to exit
 		pf.cancel()
+		<-pf.ctx.Done() // Wait for PortForward context to finish.
 	}
+
 	delete(s.state.portForwards, id)
 }
 
 type notFound struct{}
 
+// Check that struct satisfies interface
 var _ error = (*notFound)(nil)
 
 func (e *notFound) Error() string {
@@ -488,20 +570,40 @@ func (e *notFound) NotFound() bool {
 	return true
 }
 
-func (s *Service) Find(namespace string, gvk schema.GroupVersionKind, name string) (State, error) {
+func (s *Service) FindTarget(namespace string, gvk schema.GroupVersionKind, name string) ([]State, error) {
 	s.state.Lock()
 	defer s.state.Unlock()
+
+	result := make([]State, 0, len(s.state.portForwards))
 
 	for _, state := range s.state.portForwards {
 		target := state.Target
 		if target.GVK.String() == gvk.String() &&
 			namespace == target.Namespace &&
 			name == target.Name {
-			return state, nil
+			result = append(result, state)
 		}
 	}
 
-	return State{}, &notFound{}
+	return result, &notFound{}
+}
+
+func (s *Service) FindPod(namespace string, gvk schema.GroupVersionKind, name string) ([]State, error) {
+	s.state.Lock()
+	defer s.state.Unlock()
+
+	result := make([]State, 0, len(s.state.portForwards))
+
+	for _, state := range s.state.portForwards {
+		target := state.Pod
+		if target.GVK.String() == gvk.String() &&
+			namespace == target.Namespace &&
+			name == target.Name {
+			result = append(result, state)
+		}
+	}
+
+	return result, &notFound{}
 }
 
 // newForwardRequest constructs a port forwarding request based on the provided parameters

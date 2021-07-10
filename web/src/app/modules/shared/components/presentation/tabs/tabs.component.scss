@@ -1,0 +1,24 @@
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.tab-button {
+  outline: none;
+}
+
+.breadcrumb-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+
+.title-container {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  max-width: 10rem;
+  margin-left: 0.8rem;
+
+  .item {
+    margin: 0 5px;
+  }
+}

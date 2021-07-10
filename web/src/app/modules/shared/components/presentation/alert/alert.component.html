@@ -1,0 +1,7 @@
+<cds-alert-group type="{{type}}" status="{{status}}" *ngIf="showAlert">
+  <cds-alert [closable]="closable" (closeChange)="close()">
+    {{message}}
+  </cds-alert>
+  <app-button-group [view]="buttonGroup" *ngIf="buttonGroup">
+  </app-button-group>
+</cds-alert-group>

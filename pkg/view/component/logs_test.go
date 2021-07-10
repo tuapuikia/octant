@@ -1,15 +1,16 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"path"
 	"testing"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,9 +26,10 @@ func Test_Logs_Marshal(t *testing.T) {
 		{
 			name: "in general",
 			input: &Logs{
-				base: newBase(typeLogs, TitleFromString("Logs")),
+				Base: newBase(TypeLogs, TitleFromString("Logs")),
 				Config: LogsConfig{
 					Containers: []string{"one", "two"},
+					Durations:  []Since{{Label: "5 minutes", Seconds: 300}},
 				},
 			},
 			expectedPath: "logs.json",

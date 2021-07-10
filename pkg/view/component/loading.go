@@ -1,15 +1,17 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import "github.com/vmware-tanzu/octant/internal/util/json"
 
 // Loading is a component for a spinner
+//
+// +octant:component
 type Loading struct {
-	base
+	Base
 	Config LoadingConfig `json:"config"`
 }
 
@@ -21,7 +23,7 @@ type LoadingConfig struct {
 // NewLoading creates a loading component
 func NewLoading(title []TitleComponent, message string) *Loading {
 	return &Loading{
-		base: newBase(typeLoading, title),
+		Base: newBase(TypeLoading, title),
 		Config: LoadingConfig{
 			Text: message,
 		},
@@ -36,7 +38,7 @@ type loadingMarshal Loading
 // MarshalJSON implements json.Marshaler
 func (t *Loading) MarshalJSON() ([]byte, error) {
 	m := loadingMarshal(*t)
-	m.Metadata.Type = typeLoading
+	m.Metadata.Type = TypeLoading
 	return json.Marshal(&m)
 }
 

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,10 +8,10 @@ package yamlviewer
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -23,7 +23,9 @@ func Test_ToComponent(t *testing.T) {
 	require.NoError(t, err)
 
 	data := "---\nmetadata:\n  creationTimestamp: null\nspec:\n  containers: null\nstatus: {}\n"
-	expected := component.NewYAML(component.TitleFromString("YAML"), data)
+	expected := component.NewEditor(component.TitleFromString("YAML"), data, false)
+	expected.Config.Language = "yaml"
+	require.NoError(t, expected.SetValueFromObject(object))
 
-	assert.Equal(t, expected, got)
+	testutil.AssertJSONEqual(t, expected, got)
 }

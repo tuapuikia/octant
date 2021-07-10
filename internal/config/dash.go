@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,24 +8,61 @@ package config
 import (
 	"context"
 
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/kubeconfig"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/store"
 
 	"github.com/pkg/errors"
-	apiextv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/internal/cluster"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/internal/portforward"
-	"github.com/vmware/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/internal/cluster"
+	internalErr "github.com/vmware-tanzu/octant/internal/errors"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/internal/portforward"
+	"github.com/vmware-tanzu/octant/pkg/log"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
 )
 
-//go:generate mockgen -source=dash.go -destination=./fake/mock_dash.go -package=fake github.com/vmware/octant/internal/config Dash
+//go:generate mockgen -destination=./fake/mock_dash.go -package=fake github.com/vmware-tanzu/octant/internal/config Dash
+//go:generate mockgen -destination=./fake/mock_kubecontextdecorator.go -package=fake github.com/vmware-tanzu/octant/internal/config KubeContextDecorator
 
 // CRDWatcher watches for CRDs.
 type CRDWatcher interface {
-	Watch(ctx context.Context, config *CRDWatchConfig) error
+	Watch(ctx context.Context) error
+	AddConfig(config *CRDWatchConfig) error
+}
+
+// KubeContextDecorator handles context changes
+type KubeContextDecorator interface {
+	SwitchContext(context.Context, string) error
+	ClusterClient() cluster.ClientInterface
+	CurrentContext() string
+	Contexts() []kubeconfig.Context
+}
+
+func StaticClusterClient(client cluster.ClientInterface) *staticClusterClient {
+	return &staticClusterClient{client}
+}
+
+type staticClusterClient struct {
+	cluster.ClientInterface
+}
+
+func (scc *staticClusterClient) SwitchContext(
+	ctx context.Context,
+	contextName string,
+) error {
+	return nil
+}
+func (scc *staticClusterClient) ClusterClient() cluster.ClientInterface {
+	return scc.ClientInterface
+}
+func (scc *staticClusterClient) CurrentContext() string {
+	return ""
+}
+func (scc *staticClusterClient) Contexts() []kubeconfig.Context {
+	return nil
 }
 
 // ObjectHandler is a function that is run when a new object is available.
@@ -36,6 +73,17 @@ type CRDWatchConfig struct {
 	Add          ObjectHandler
 	Delete       ObjectHandler
 	IsNamespaced bool
+}
+
+type BuildInfo struct {
+	Version string
+	Commit  string
+	Time    string
+}
+
+type Context struct {
+	Name             string
+	DefaultNamespace string
 }
 
 // CanPerform returns true if config can perform actions on an object.
@@ -50,11 +98,11 @@ func (c *CRDWatchConfig) CanPerform(u *unstructured.Unstructured) bool {
 		return false
 	}
 
-	if c.IsNamespaced && scope != string(apiextv1beta1.NamespaceScoped) {
+	if c.IsNamespaced && scope != string(apiextv1.NamespaceScoped) {
 		return false
 	}
 
-	if !c.IsNamespaced && scope != string(apiextv1beta1.ClusterScoped) {
+	if !c.IsNamespaced && scope != string(apiextv1.ClusterScoped) {
 		return false
 	}
 
@@ -64,13 +112,14 @@ func (c *CRDWatchConfig) CanPerform(u *unstructured.Unstructured) bool {
 // Config is configuration for dash. It has knowledge of the all the major sections of
 // dash.
 type Dash interface {
-	ObjectPath(namespace, apiVersion, kind, name string) (string, error)
+	octant.LinkGenerator
+	octant.Storage
 
 	ClusterClient() cluster.ClientInterface
 
 	CRDWatcher() CRDWatcher
 
-	ObjectStore() store.Store
+	ErrorStore() internalErr.ErrorStore
 
 	Logger() log.Logger
 
@@ -78,59 +127,77 @@ type Dash interface {
 
 	PortForwarder() portforward.PortForwarder
 
-	KubeConfigPath() string
+	SetContextChosenInUI(contextChosen bool)
+
+	UseFSContext(ctx context.Context) error
 
 	UseContext(ctx context.Context, contextName string) error
 
-	ContextName() string
+	CurrentContext() string
+
+	Contexts() []kubeconfig.Context
+
+	DefaultNamespace() string
 
 	Validate() error
+
+	ModuleManager() module.ManagerInterface
+
+	BuildInfo() (string, string, string)
+
+	KubeConfigPath() string
 }
+
+// UseFSContext is used to indicate a context switch to the file system Kubeconfig context
+const UseFSContext = ""
 
 // Live is a live version of dash config.
 type Live struct {
-	clusterClient      cluster.ClientInterface
-	crdWatcher         CRDWatcher
-	logger             log.Logger
-	moduleManager      module.ManagerInterface
-	objectStore        store.Store
-	pluginManager      plugin.ManagerInterface
-	portForwarder      portforward.PortForwarder
-	kubeConfigPath     string
-	currentContextName string
-	restConfigOptions  cluster.RESTConfigOptions
+	kubeContextDecorator KubeContextDecorator
+	crdWatcher           CRDWatcher
+	logger               log.Logger
+	moduleManager        module.ManagerInterface
+	objectStore          store.Store
+	errorStore           internalErr.ErrorStore
+	pluginManager        plugin.ManagerInterface
+	portForwarder        portforward.PortForwarder
+	restConfigOptions    cluster.RESTConfigOptions
+	buildInfo            BuildInfo
+	kubeConfigPath       string
+	contextChosenInUI    bool
 }
 
 var _ Dash = (*Live)(nil)
 
 // NewLiveConfig creates an instance of Live.
 func NewLiveConfig(
-	clusterClient cluster.ClientInterface,
+	kubeContextDecorator KubeContextDecorator,
 	crdWatcher CRDWatcher,
-	kubeConfigPath string,
 	logger log.Logger,
 	moduleManager module.ManagerInterface,
 	objectStore store.Store,
+	errorStore internalErr.ErrorStore,
 	pluginManager plugin.ManagerInterface,
 	portForwarder portforward.PortForwarder,
-	currentContextName string,
 	restConfigOptions cluster.RESTConfigOptions,
+	buildInfo BuildInfo,
+	kubeConfigPath string,
+	contextChosenInUI bool,
 ) *Live {
 	l := &Live{
-		clusterClient:      clusterClient,
-		crdWatcher:         crdWatcher,
-		kubeConfigPath:     kubeConfigPath,
-		logger:             logger,
-		moduleManager:      moduleManager,
-		objectStore:        objectStore,
-		pluginManager:      pluginManager,
-		portForwarder:      portForwarder,
-		currentContextName: currentContextName,
-		restConfigOptions:  restConfigOptions,
+		kubeContextDecorator: kubeContextDecorator,
+		crdWatcher:           crdWatcher,
+		logger:               logger,
+		moduleManager:        moduleManager,
+		objectStore:          objectStore,
+		errorStore:           errorStore,
+		pluginManager:        pluginManager,
+		portForwarder:        portForwarder,
+		restConfigOptions:    restConfigOptions,
+		buildInfo:            buildInfo,
+		kubeConfigPath:       kubeConfigPath,
+		contextChosenInUI:    contextChosenInUI,
 	}
-	objectStore.RegisterOnUpdate(func(store store.Store) {
-		l.objectStore = store
-	})
 
 	return l
 }
@@ -142,7 +209,7 @@ func (l *Live) ObjectPath(namespace, apiVersion, kind, name string) (string, err
 
 // ClusterClient returns a cluster client.
 func (l *Live) ClusterClient() cluster.ClientInterface {
-	return l.clusterClient
+	return l.kubeContextDecorator.ClusterClient()
 }
 
 // CRDWatcher returns a CRD watcher.
@@ -150,14 +217,14 @@ func (l *Live) CRDWatcher() CRDWatcher {
 	return l.crdWatcher
 }
 
-// Store returns an object store.
+// ObjectStore returns an object store.
 func (l *Live) ObjectStore() store.Store {
 	return l.objectStore
 }
 
-// KubeConfigPath returns the kube config path.
-func (l *Live) KubeConfigPath() string {
-	return l.kubeConfigPath
+// ErrorStore returns an error store.
+func (l *Live) ErrorStore() internalErr.ErrorStore {
+	return l.errorStore
 }
 
 // Logger returns a logger.
@@ -175,16 +242,26 @@ func (l *Live) PortForwarder() portforward.PortForwarder {
 	return l.portForwarder
 }
 
-// UseContext switches context name.
+func (l *Live) SetContextChosenInUI(contextChosen bool) {
+	l.contextChosenInUI = contextChosen
+}
+
+func (l *Live) UseFSContext(ctx context.Context) error {
+	return l.UseContext(ctx, UseFSContext)
+}
+
+// UseContext switches context name. This process should have synchronously.
 func (l *Live) UseContext(ctx context.Context, contextName string) error {
-	client, err := cluster.FromKubeConfig(ctx, l.kubeConfigPath, contextName, l.restConfigOptions)
+	if l.contextChosenInUI && contextName == UseFSContext {
+		contextName = l.CurrentContext()
+	}
+
+	err := l.kubeContextDecorator.SwitchContext(ctx, contextName)
 	if err != nil {
 		return err
 	}
 
-	l.ClusterClient().Close()
-	l.clusterClient = client
-
+	client := l.kubeContextDecorator.ClusterClient()
 	if err := l.objectStore.UpdateClusterClient(ctx, client); err != nil {
 		return err
 	}
@@ -193,20 +270,37 @@ func (l *Live) UseContext(ctx context.Context, contextName string) error {
 		return err
 	}
 
-	l.currentContextName = contextName
 	l.Logger().With("new-kube-context", contextName).Infof("updated kube config context")
+
+	for _, m := range l.moduleManager.Modules() {
+		if err := m.ResetCRDs(ctx); err != nil {
+			return errors.Wrapf(err, "unable to reset CRDs for module %s", m.Name())
+		}
+	}
+
+	l.pluginManager.SetOctantClient(l)
 
 	return nil
 }
 
-// ContextName returns the current context name
-func (l *Live) ContextName() string {
-	return l.currentContextName
+// CurrentContext returns the current context name
+func (l *Live) CurrentContext() string {
+	return l.kubeContextDecorator.CurrentContext()
+}
+
+// Contexts returns the set of all contexts
+func (l *Live) Contexts() []kubeconfig.Context {
+	return l.kubeContextDecorator.Contexts()
+}
+
+// DefaultNamespace returns the default namespace for the current cluster..
+func (l *Live) DefaultNamespace() string {
+	return l.ClusterClient().DefaultNamespace()
 }
 
 // Validate validates the configuration and returns an error if there is an issue.
 func (l *Live) Validate() error {
-	if l.clusterClient == nil {
+	if l.ClusterClient() == nil {
 		return errors.New("cluster client is nil")
 	}
 
@@ -235,4 +329,17 @@ func (l *Live) Validate() error {
 	}
 
 	return nil
+}
+
+func (l *Live) ModuleManager() module.ManagerInterface {
+	return l.moduleManager
+}
+
+// BuildInfo returns build ldflag strings for version, commit hash, and build time
+func (l *Live) BuildInfo() (string, string, string) {
+	return l.buildInfo.Version, l.buildInfo.Commit, l.buildInfo.Time
+}
+
+func (l *Live) KubeConfigPath() string {
+	return l.kubeConfigPath
 }

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/gvk"
 )
 
 func TestCapabilities_HasPrinterSupport(t *testing.T) {

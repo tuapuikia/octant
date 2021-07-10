@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,15 +7,28 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
-	"github.com/pkg/errors"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
+
+	"google.golang.org/grpc/metadata"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/internal/gvk"
-	"github.com/vmware/octant/internal/portforward"
-	"github.com/vmware/octant/pkg/plugin/api/proto"
-	"github.com/vmware/octant/pkg/store"
+	ocontext "github.com/vmware-tanzu/octant/internal/context"
+	"github.com/vmware-tanzu/octant/pkg/event"
+
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/portforward"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/cluster"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api/proto"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
+
+// DashboardMetadataKey is a type used for metadata keys passed by plugins
+type DashboardMetadataKey string
 
 // PortForwardRequest describes a port forward request.
 type PortForwardRequest struct {
@@ -31,14 +44,28 @@ type PortForwardResponse struct {
 	Port uint16
 }
 
+// NamespacesResponse is a response from listing namespaces
+type NamespacesResponse struct {
+	Namespaces []string
+}
+
+type LinkResponse struct {
+	Link component.Link
+}
+
 // Service is the dashboard service.
 type Service interface {
 	List(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, error)
 	Get(ctx context.Context, key store.Key) (*unstructured.Unstructured, error)
 	PortForward(ctx context.Context, req PortForwardRequest) (PortForwardResponse, error)
 	CancelPortForward(ctx context.Context, id string)
+	ListNamespaces(ctx context.Context) (NamespacesResponse, error)
 	Update(ctx context.Context, object *unstructured.Unstructured) error
+	Create(ctx context.Context, object *unstructured.Unstructured) error
+	Delete(ctx context.Context, key store.Key) error
 	ForceFrontendUpdate(ctx context.Context) error
+	SendAlert(ctx context.Context, clientID string, alert action.Alert) error
+	CreateLink(ctx context.Context, key store.Key) (LinkResponse, error)
 }
 
 // FrontendUpdateController can control the frontend. ie. the web gui
@@ -62,9 +89,12 @@ func (proxy *FrontendProxy) ForceFrontendUpdate() error {
 
 // GRPCService is an implementation of the dashboard service based on GRPC.
 type GRPCService struct {
-	ObjectStore   store.Store
-	PortForwarder portforward.PortForwarder
-	FrontendProxy FrontendProxy
+	ObjectStore            store.Store
+	PortForwarder          portforward.PortForwarder
+	FrontendProxy          FrontendProxy
+	NamespaceInterface     cluster.NamespaceInterface
+	WebsocketClientManager event.WSClientGetter
+	LinkGenerator          octant.LinkGenerator
 }
 
 var _ Service = (*GRPCService)(nil)
@@ -72,12 +102,14 @@ var _ Service = (*GRPCService)(nil)
 // List lists objects.
 func (s *GRPCService) List(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, error) {
 	// TODO: support hasSynced
+	ctx = extractObjectStoreMetadata(ctx)
 	list, _, err := s.ObjectStore.List(ctx, key)
 	return list, err
 }
 
 // Get retrieves an object.
 func (s *GRPCService) Get(ctx context.Context, key store.Key) (*unstructured.Unstructured, error) {
+	ctx = extractObjectStoreMetadata(ctx)
 	return s.ObjectStore.Get(ctx, key)
 }
 
@@ -87,20 +119,26 @@ func (s *GRPCService) Update(ctx context.Context, object *unstructured.Unstructu
 		return err
 	}
 
+	ctx = extractObjectStoreMetadata(ctx)
 	return s.ObjectStore.Update(ctx, key, func(u *unstructured.Unstructured) error {
 		u.Object = object.Object
 		return nil
 	})
 }
 
+func (s *GRPCService) Create(ctx context.Context, object *unstructured.Unstructured) error {
+	ctx = extractObjectStoreMetadata(ctx)
+	return s.ObjectStore.Create(ctx, object)
+}
+
+func (s *GRPCService) Delete(ctx context.Context, key store.Key) error {
+	ctx = extractObjectStoreMetadata(ctx)
+	return s.ObjectStore.Delete(ctx, key)
+}
+
 // PortForward creates a port forward.
 func (s *GRPCService) PortForward(ctx context.Context, req PortForwardRequest) (PortForwardResponse, error) {
-	pfResponse, err := s.PortForwarder.Create(
-		ctx,
-		gvk.Pod,
-		req.PodName,
-		req.Namespace,
-		req.Port)
+	pfResponse, err := s.PortForwarder.Create(ctx, nil, gvk.Pod, req.PodName, req.Namespace, req.Port)
 	if err != nil {
 		return PortForwardResponse{}, err
 	}
@@ -118,8 +156,64 @@ func (s *GRPCService) CancelPortForward(ctx context.Context, id string) {
 	s.PortForwarder.StopForwarder(id)
 }
 
+// ListNamespaces lists namespaces
+func (s *GRPCService) ListNamespaces(ctx context.Context) (NamespacesResponse, error) {
+	namespaces, err := s.NamespaceInterface.Names()
+	if err != nil {
+		return NamespacesResponse{}, err
+	}
+
+	resp := NamespacesResponse{
+		Namespaces: namespaces,
+	}
+	return resp, nil
+}
+
 func (s *GRPCService) ForceFrontendUpdate(ctx context.Context) error {
 	return s.FrontendProxy.ForceFrontendUpdate()
+}
+
+// SendAlert sends an alert
+func (s *GRPCService) SendAlert(ctx context.Context, clientID string, alert action.Alert) error {
+	event := event.CreateEvent(event.EventTypeAlert, action.Payload{
+		"type":       alert.Type,
+		"message":    alert.Message,
+		"expiration": alert.Expiration,
+	})
+	if s.WebsocketClientManager == nil {
+		return fmt.Errorf("websocket client manager is nil")
+	}
+
+	if clientID == "" {
+		return fmt.Errorf("no websocket client id")
+	}
+
+	sender := s.WebsocketClientManager.Get(clientID)
+	if sender == nil {
+		clientID := ocontext.ClientStateFrom(ctx).ClientID
+		return fmt.Errorf("unable to find ws client %s", clientID)
+	}
+
+	sender.Send(event)
+	return nil
+}
+
+func (s *GRPCService) CreateLink(_ context.Context, key store.Key) (LinkResponse, error) {
+	ref, err := s.LinkGenerator.ObjectPath(key.Namespace, key.APIVersion, key.Kind, key.Name)
+	if err != nil {
+		return LinkResponse{}, err
+	}
+
+	linkComponent := component.NewLink("", "", ref)
+	return LinkResponse{
+		Link: *linkComponent,
+	}, nil
+}
+
+func NewGRPCServer(service Service) *grpcServer {
+	return &grpcServer{
+		service: service,
+	}
 }
 
 type grpcServer struct {
@@ -164,13 +258,19 @@ func (c *grpcServer) Get(ctx context.Context, in *proto.KeyRequest) (*proto.GetR
 		return nil, err
 	}
 
-	encodedObject, err := convertFromObject(object)
-	if err != nil {
-		return nil, err
-	}
+	var out *proto.GetResponse
 
-	out := &proto.GetResponse{
-		Object: encodedObject,
+	if object != nil {
+		encodedObject, err := convertFromObject(object)
+		if err != nil {
+			return nil, err
+		}
+
+		out = &proto.GetResponse{
+			Object: encodedObject,
+		}
+	} else {
+		return &proto.GetResponse{}, nil
 	}
 
 	return out, nil
@@ -183,11 +283,48 @@ func (c *grpcServer) Update(ctx context.Context, in *proto.UpdateRequest) (*prot
 		return nil, err
 	}
 
+	if object == nil {
+		return &proto.UpdateResponse{}, fmt.Errorf("can't update an object that doesn't exist")
+	}
+
 	if err := c.service.Update(ctx, object); err != nil {
 		return nil, err
 	}
 
 	return &proto.UpdateResponse{}, nil
+}
+
+// Create creates an object in the cluster.
+func (c *grpcServer) Create(ctx context.Context, in *proto.CreateRequest) (*proto.CreateResponse, error) {
+	object, err := convertToObject(in.Object)
+	if err != nil {
+		return nil, err
+	}
+
+	if object == nil {
+		return nil, fmt.Errorf("unable to create a nil object")
+	}
+
+	if err := c.service.Create(ctx, object); err != nil {
+		return nil, err
+	}
+
+	return &proto.CreateResponse{}, nil
+}
+
+// Get gets an object.
+func (c *grpcServer) Delete(ctx context.Context, in *proto.KeyRequest) (*proto.DeleteResponse, error) {
+	key, err := convertToKey(in)
+	if err != nil {
+		return nil, err
+	}
+
+	err = c.service.Delete(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return &proto.DeleteResponse{}, nil
 }
 
 // PortForward creates a port forward.
@@ -213,11 +350,24 @@ func (c *grpcServer) PortForward(ctx context.Context, in *proto.PortForwardReque
 // CancelPortForward cancels a port forward.
 func (c *grpcServer) CancelPortForward(ctx context.Context, in *proto.CancelPortForwardRequest) (*proto.Empty, error) {
 	if in == nil {
-		return nil, errors.New("request is nil")
+		return nil, fmt.Errorf("request is nil")
 	}
 
 	c.service.CancelPortForward(ctx, in.PortForwardID)
 	return &proto.Empty{}, nil
+}
+
+// Namespaces lists namespaces.
+func (c *grpcServer) ListNamespaces(ctx context.Context, _ *proto.Empty) (*proto.NamespacesResponse, error) {
+	nsResp, err := c.service.ListNamespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &proto.NamespacesResponse{
+		Namespaces: nsResp.Namespaces,
+	}
+	return resp, nil
 }
 
 // ForceFrontendUpdate forces the front end to update.
@@ -227,4 +377,49 @@ func (c *grpcServer) ForceFrontendUpdate(ctx context.Context, _ *proto.Empty) (*
 	}
 
 	return &proto.Empty{}, nil
+}
+
+// SendAlert sends an alert
+func (c *grpcServer) SendAlert(ctx context.Context, in *proto.AlertRequest) (*proto.Empty, error) {
+	alert, err := convertToAlert(in)
+	if err != nil {
+		return nil, err
+	}
+
+	c.service.SendAlert(ctx, in.ClientID, alert)
+	return &proto.Empty{}, nil
+}
+
+func (c *grpcServer) CreateLink(ctx context.Context, in *proto.KeyRequest) (*proto.LinkResponse, error) {
+	key, err := convertToKey(in)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.service.CreateLink(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	var ref string
+	if &resp.Link != nil && &resp.Link.Config != nil {
+		ref = resp.Link.Config.Ref
+	}
+
+	return &proto.LinkResponse{
+		Ref: ref,
+	}, nil
+}
+
+func extractObjectStoreMetadata(ctx context.Context) context.Context {
+	// Second value is ignored as metadata is always set by grpc.
+	md, _ := metadata.FromIncomingContext(ctx)
+	for k, v := range md {
+		if strings.HasPrefix(k, "x-octant-") {
+			ctxKey := strings.Replace(k, "x-octant-", "", 1)
+			ctx = context.WithValue(ctx, DashboardMetadataKey(ctxKey), v[0])
+		}
+	}
+
+	return ctx
 }

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,26 +7,24 @@ package overview
 
 import (
 	"context"
-	"fmt"
-	"net/http"
 	"sync"
-	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/vmware-tanzu/octant/pkg/store"
+
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/internal/api"
-	"github.com/vmware/octant/internal/config"
-	"github.com/vmware/octant/internal/describer"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/internal/octant"
-	"github.com/vmware/octant/pkg/action"
-	"github.com/vmware/octant/pkg/icon"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/config"
+	"github.com/vmware-tanzu/octant/internal/describer"
+	"github.com/vmware-tanzu/octant/internal/generator"
+	internalLog "github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/icon"
+	"github.com/vmware-tanzu/octant/pkg/log"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 type Options struct {
@@ -38,12 +36,37 @@ type Options struct {
 type Overview struct {
 	*octant.ObjectPath
 
-	generator   *realGenerator
+	generator   generator.Interface
 	dashConfig  config.Dash
 	contextName string
+	pathMatcher *describer.PathMatcher
 	logger      log.Logger
 
+	watchedCRDs []*unstructured.Unstructured
+
+	navigationCrdCache map[string][]navigation.Navigation
+	navigationCrdLock  sync.Mutex
+
 	mu sync.Mutex
+}
+
+func (co *Overview) CRDEntries(ctx context.Context, prefix, namespace string, objectStore store.Store, wantsClusterScoped bool) ([]navigation.Navigation, bool, error) {
+	if _, ok := co.navigationCrdCache[namespace]; ok {
+		return co.navigationCrdCache[namespace], false, nil
+	}
+
+	co.navigationCrdLock.Lock()
+	defer co.navigationCrdLock.Unlock()
+
+	entries, loading, err := navigation.CRDEntries(ctx, prefix, namespace, objectStore, wantsClusterScoped)
+	if len(entries) > 0 {
+		if co.navigationCrdCache == nil {
+			co.navigationCrdCache = make(map[string][]navigation.Navigation)
+		}
+		co.navigationCrdCache[namespace] = entries
+		return co.navigationCrdCache[namespace], loading, err
+	}
+	return []navigation.Navigation{}, false, nil
 }
 
 var _ module.Module = (*Overview)(nil)
@@ -68,24 +91,30 @@ func New(ctx context.Context, options Options) (*Overview, error) {
 		return nil, err
 	}
 
-	logger := log.From(ctx).With("module", "overview")
-
-	co.dashConfig.ObjectStore().RegisterOnUpdate(func(newObjectStore store.Store) {
-		logger.Debugf("object store was updated")
-		if err := co.bootstrap(ctx); err != nil {
-			logger.WithErr(err).Errorf("updating object store")
-		}
-	})
-
 	return co, nil
 }
 
 func (co *Overview) SetContext(ctx context.Context, contextName string) error {
+	co.mu.Lock()
+	defer co.mu.Unlock()
+
+	customResourcesDescriber := describer.NamespacedCRD()
 	co.contextName = contextName
+	for i := range co.watchedCRDs {
+		describer.DeleteCRD(ctx, co.watchedCRDs[i], co.pathMatcher, customResourcesDescriber, co)
+	}
+
+	co.watchedCRDs = []*unstructured.Unstructured{}
+	crdWatcher := co.dashConfig.CRDWatcher()
+	crdWatcher.Watch(ctx)
+
+	co.navigationCrdCache = nil
 	return nil
 }
 
 func (co *Overview) bootstrap(ctx context.Context) error {
+	rootDescriber := describer.NamespacedOverview()
+
 	if err := rootDescriber.Reset(ctx); err != nil {
 		return err
 	}
@@ -95,20 +124,17 @@ func (co *Overview) bootstrap(ctx context.Context) error {
 		pathMatcher.Register(ctx, pf)
 	}
 
-	for _, pf := range eventsDescriber.PathFilters() {
-		pathMatcher.Register(ctx, pf)
-	}
-
-	g, err := newGenerator(pathMatcher, co.dashConfig)
+	g, err := generator.NewGenerator(pathMatcher, co.dashConfig)
 	if err != nil {
 		return errors.Wrap(err, "create overview generator")
 	}
 
 	objectPathConfig := octant.ObjectPathConfig{
-		ModuleName:     "overview",
-		SupportedGVKs:  supportedGVKs,
-		PathLookupFunc: gvkPath,
-		CRDPathGenFunc: crdPath,
+		ModuleName:            "overview",
+		SupportedGVKs:         supportedGVKs,
+		PathLookupFunc:        gvkPath,
+		ReversePathLookupFunc: gvkReversePath,
+		CRDPathGenFunc:        crdPath,
 	}
 	objectPath, err := octant.NewObjectPath(objectPathConfig)
 	if err != nil {
@@ -118,37 +144,52 @@ func (co *Overview) bootstrap(ctx context.Context) error {
 	co.ObjectPath = objectPath
 	co.generator = g
 
-	key := store.Key{
-		APIVersion: "apiextensions.k8s.io/v1beta1",
-		Kind:       "CustomResourceDefinition",
-	}
-
 	crdWatcher := co.dashConfig.CRDWatcher()
-	if err := co.dashConfig.ObjectStore().HasAccess(ctx, key, "watch"); err == nil {
-		watchConfig := &config.CRDWatchConfig{
-			Add: func(_ *describer.PathMatcher, sectionDescriber *describer.CRDSection) config.ObjectHandler {
-				return func(ctx context.Context, object *unstructured.Unstructured) {
-					if object == nil {
-						return
-					}
-					describer.AddCRD(ctx, object, pathMatcher, customResourcesDescriber, co)
-				}
-			}(pathMatcher, customResourcesDescriber),
-			Delete: func(_ *describer.PathMatcher, csd *describer.CRDSection) config.ObjectHandler {
-				return func(ctx context.Context, object *unstructured.Unstructured) {
-					if object == nil {
-						return
-					}
-					describer.DeleteCRD(ctx, object, pathMatcher, customResourcesDescriber, co)
-				}
-			}(pathMatcher, customResourcesDescriber),
-			IsNamespaced: true,
-		}
 
-		if err := crdWatcher.Watch(ctx, watchConfig); err != nil {
-			return errors.Wrap(err, "create namespaced CRD watcher for overview")
-		}
+	customResourcesDescriber := describer.NamespacedCRD()
+
+	watchConfig := &config.CRDWatchConfig{
+		Add: func(pathMatcher *describer.PathMatcher, sectionDescriber *describer.CRDSection) config.ObjectHandler {
+			return func(ctx context.Context, object *unstructured.Unstructured) {
+				co.mu.Lock()
+				defer co.mu.Unlock()
+
+				if object == nil {
+					return
+				}
+				describer.AddCRD(ctx, object, pathMatcher, customResourcesDescriber, co, co.dashConfig.ObjectStore())
+				co.watchedCRDs = append(co.watchedCRDs, object)
+				delete(co.navigationCrdCache, object.GetNamespace())
+			}
+		}(pathMatcher, customResourcesDescriber),
+		Delete: func(pathMatcher *describer.PathMatcher, csd *describer.CRDSection) config.ObjectHandler {
+			return func(ctx context.Context, object *unstructured.Unstructured) {
+				co.mu.Lock()
+				defer co.mu.Unlock()
+
+				if object == nil {
+					return
+				}
+				describer.DeleteCRD(ctx, object, pathMatcher, customResourcesDescriber, co)
+				var list []*unstructured.Unstructured
+				for i := range co.watchedCRDs {
+					if co.watchedCRDs[i].GetUID() == object.GetUID() {
+						continue
+					}
+					list = append(list, co.watchedCRDs[i])
+				}
+				co.watchedCRDs = list
+				delete(co.navigationCrdCache, object.GetNamespace())
+			}
+		}(pathMatcher, customResourcesDescriber),
+		IsNamespaced: true,
 	}
+
+	if err := crdWatcher.AddConfig(watchConfig); err != nil {
+		return errors.Wrap(err, "create namespaced CRD watcher for overview")
+	}
+
+	co.pathMatcher = pathMatcher
 
 	return nil
 }
@@ -158,9 +199,18 @@ func (co *Overview) Name() string {
 	return "overview"
 }
 
+// Description returns module description.
+func (co *Overview) Description() string {
+	return "Namespace module shows all resources related to currently selected namespace\nUse dropdown at the top to change the selected namespace"
+}
+
+func (co *Overview) ClientRequestHandlers() []octant.ClientRequestHandler {
+	return nil
+}
+
 // ContentPath returns the content path for overview.
 func (co *Overview) ContentPath() string {
-	return fmt.Sprintf("/%s", co.Name())
+	return co.Name()
 }
 
 // Navigation returns navigation entries for overview.
@@ -168,14 +218,25 @@ func (co *Overview) Navigation(ctx context.Context, namespace, root string) ([]n
 	navigationEntries := octant.NavigationEntries{
 		Lookup: navPathLookup,
 		EntriesFuncs: map[string]octant.EntriesFunc{
+			"Namespace Overview":           nil,
 			"Workloads":                    workloadEntries,
 			"Discovery and Load Balancing": discoAndLBEntries,
 			"Config and Storage":           configAndStorageEntries,
-			"Custom Resources":             navigation.CRDEntries,
+			"Custom Resources":             co.CRDEntries,
 			"RBAC":                         rbacEntries,
 			"Events":                       nil,
 		},
+		IconMap: map[string]string{
+			"Namespace Overview":           icon.Overview,
+			"Workloads":                    icon.Workloads,
+			"Discovery and Load Balancing": icon.DiscoveryAndLoadBalancing,
+			"Config and Storage":           icon.ConfigAndStorage,
+			"Custom Resources":             icon.CustomResources,
+			"RBAC":                         icon.RBAC,
+			"Events":                       icon.Events,
+		},
 		Order: []string{
+			"Namespace Overview",
 			"Workloads",
 			"Discovery and Load Balancing",
 			"Config and Storage",
@@ -189,14 +250,12 @@ func (co *Overview) Navigation(ctx context.Context, namespace, root string) ([]n
 
 	nf := octant.NewNavigationFactory(namespace, root, objectStore, navigationEntries)
 
-	entries, err := nf.Generate(ctx, "Overview", icon.Overview, "", false)
+	entries, err := nf.Generate(ctx, "", false)
 	if err != nil {
 		return nil, err
 	}
 
-	return []navigation.Navigation{
-		*entries,
-	}, nil
+	return entries, nil
 }
 
 // Generators allow modules to send events to the frontend.
@@ -221,108 +280,30 @@ func (co *Overview) Stop() {
 }
 
 // Content serves content for overview.
-func (co *Overview) Content(ctx context.Context, contentPath, prefix, namespace string, opts module.ContentOptions) (component.ContentResponse, error) {
-	ctx = log.WithLoggerContext(ctx, co.dashConfig.Logger())
-	genOpts := GeneratorOptions{
+func (co *Overview) Content(ctx context.Context, contentPath string, opts module.ContentOptions) (component.ContentResponse, error) {
+	ctx = internalLog.WithLoggerContext(ctx, co.dashConfig.Logger())
+	genOpts := generator.Options{
 		LabelSet: opts.LabelSet,
 	}
-	return co.generator.Generate(ctx, contentPath, prefix, namespace, genOpts)
+	return co.generator.Generate(ctx, contentPath, genOpts)
 }
 
-type logEntry struct {
-	Timestamp time.Time `json:"timestamp,omitempty"`
-	Message   string    `json:"message,omitempty"`
-}
-
-type logResponse struct {
-	Entries []logEntry `json:"entries,omitempty"`
-}
-
-// Handlers are extra handlers for overview
-func (co *Overview) Handlers(ctx context.Context) map[string]http.Handler {
-	return map[string]http.Handler{
-		"/logs/pod/{pod}/container/{container}": containerLogsHandler(ctx, co.dashConfig.ClusterClient()),
-		"/port-forwards":                        co.portForwardsHandler(),
-		"/port-forwards/{id}":                   co.portForwardHandler(),
-	}
-}
-
-func (co *Overview) portForwardsHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		svc := co.dashConfig.PortForwarder()
-		logger := co.dashConfig.Logger()
-
-		if svc == nil {
-			logger.Errorf("port forward service is nil")
-			http.Error(w, "port forward service is nil", http.StatusInternalServerError)
-			return
-		}
-
-		ctx := log.WithLoggerContext(r.Context(), logger)
-
-		defer func() {
-			if cErr := r.Body.Close(); cErr != nil {
-				logger.With("err", cErr).Errorf("unable to close port forward request body")
-			}
-		}()
-
-		switch r.Method {
-		case http.MethodPost:
-			err := createPortForward(ctx, r.Body, svc, w)
-			handlePortForwardError(w, err, logger)
-		default:
-			api.RespondWithError(
-				w,
-				http.StatusNotFound,
-				fmt.Sprintf("unhandled HTTP method %s", r.Method),
-				logger,
-			)
-		}
-	}
-}
-
-func (co *Overview) portForwardHandler() http.HandlerFunc {
-	logger := co.dashConfig.Logger()
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		svc := co.dashConfig.PortForwarder()
-		if svc == nil {
-			logger.Errorf("port forward service is nil")
-			http.Error(w, "port forward service is nil", http.StatusInternalServerError)
-			return
-		}
-
-		vars := mux.Vars(r)
-		id := vars["id"]
-
-		ctx := log.WithLoggerContext(r.Context(), logger)
-
-		switch r.Method {
-		case http.MethodDelete:
-			err := deletePortForward(ctx, id, co.dashConfig.PortForwarder(), w)
-			handlePortForwardError(w, err, logger)
-		default:
-			api.RespondWithError(
-				w,
-				http.StatusNotFound,
-				fmt.Sprintf("unhandled HTTP method %s", r.Method),
-				logger,
-			)
-		}
-	}
-}
-
+// ActionPaths contain the actions this module is responsible for.
 func (co *Overview) ActionPaths() map[string]action.DispatcherFunc {
-	configurationEditor := NewConfigurationEditor(co.logger, co.dashConfig.ObjectStore())
-
-	return map[string]action.DispatcherFunc{
-		configurationEditor.ActionName(): configurationEditor.Handle,
+	dispatchers := action.Dispatchers{
+		octant.NewDeploymentConfigurationEditor(co.logger, co.dashConfig.ObjectStore()),
+		octant.NewContainerEditor(co.dashConfig.ObjectStore()),
+		octant.NewServiceConfigurationEditor(co.dashConfig.ObjectStore()),
+		octant.NewPortForward(co.logger, co.dashConfig.ObjectStore(), co.dashConfig.PortForwarder()),
+		octant.NewPortForwardDelete(co.logger, co.dashConfig.ObjectStore(), co.dashConfig.PortForwarder()),
+		octant.NewCordon(co.dashConfig.ObjectStore(), co.dashConfig.ClusterClient()),
+		octant.NewUncordon(co.dashConfig.ObjectStore(), co.dashConfig.ClusterClient()),
+		octant.NewCronJobTrigger(co.dashConfig.ObjectStore(), co.dashConfig.ClusterClient()),
+		octant.NewCronJobSuspend(co.dashConfig.ObjectStore(), co.dashConfig.ClusterClient()),
+		octant.NewCronJobResume(co.dashConfig.ObjectStore(), co.dashConfig.ClusterClient()),
+		octant.NewObjectUpdaterDispatcher(co.dashConfig.ObjectStore()),
+		octant.NewApplyYaml(co.logger, co.dashConfig.ObjectStore()),
 	}
-}
 
-func roundToInt(val float64) int64 {
-	if val < 0 {
-		return int64(val - 0.5)
-	}
-	return int64(val + 0.5)
+	return dispatchers.ToActionPaths()
 }

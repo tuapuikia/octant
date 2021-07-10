@@ -1,25 +1,18 @@
-// Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+// Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-import { Location } from '@angular/common';
+import { CommonModule, Location } from '@angular/common';
 import { HttpClientModule } from '@angular/common/http';
-import { Injectable, NgModule, NgZone } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { Injectable, NgModule } from '@angular/core';
+import { RouteReuseStrategy, RouterModule } from '@angular/router';
+import { HomeComponent } from './components/smart/home/home.component';
+import { AppRoutingModule } from './app-routing.module';
 import { BrowserModule } from '@angular/platform-browser';
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
-import { Router, RouterModule } from '@angular/router';
-import { ClarityModule } from '@clr/angular';
-import { NgSelectModule } from '@ng-select/ng-select';
-
-import { AppRoutingModule } from './app-routing.module';
-import { AppComponent } from './app.component';
-import { InputFilterComponent } from './components/input-filter/input-filter.component';
-import { NamespaceComponent } from './components/namespace/namespace.component';
-import { NavigationComponent } from './components/navigation/navigation.component';
-import { NotifierComponent } from './components/notifier/notifier.component';
-import { PageNotFoundComponent } from './components/page-not-found/page-not-found.component';
-import { OverviewModule } from './modules/overview/overview.module';
-import { MarkdownModule, MarkedOptions } from 'ngx-markdown';
+import { highlightProvider } from './modules/shared/highlight';
+import { MonacoEditorModule } from '@materia-ui/ngx-monaco-editor';
+import { ComponentReuseStrategy } from './modules/shared/component-reuse.strategy';
+import { windowProvider, WindowToken } from './window';
 
 @Injectable()
 export class UnstripTrailingSlashLocation extends Location {
@@ -29,51 +22,26 @@ export class UnstripTrailingSlashLocation extends Location {
 }
 
 @NgModule({
-  declarations: [
-    AppComponent,
-    NamespaceComponent,
-    PageNotFoundComponent,
-    InputFilterComponent,
-    NotifierComponent,
-    NavigationComponent,
-  ],
+  declarations: [HomeComponent],
   imports: [
+    CommonModule,
     BrowserModule,
-    ClarityModule,
     BrowserAnimationsModule,
     HttpClientModule,
     RouterModule,
-    FormsModule,
+    MonacoEditorModule,
+    // routing loads last
     AppRoutingModule,
-    OverviewModule,
-    NgSelectModule,
-    MarkdownModule.forRoot({
-      markedOptions: {
-        provide: MarkedOptions,
-        useValue: {
-          gfm: true,
-          tables: true,
-          breaks: true,
-          pedantic: false,
-          sanitize: false,
-          smartLists: true,
-          smartypants: false,
-        },
-      },
-    }),
   ],
   providers: [
     {
       provide: Location,
       useClass: UnstripTrailingSlashLocation,
     },
+    highlightProvider(),
+    { provide: RouteReuseStrategy, useClass: ComponentReuseStrategy },
+    { provide: WindowToken, useFactory: windowProvider },
   ],
-  bootstrap: [AppComponent],
+  bootstrap: [HomeComponent],
 })
-export class AppModule {
-  constructor(private ngZone: NgZone, private router: Router) {}
-
-  navigate(commands: any[]): void {
-    this.ngZone.run(() => this.router.navigate(commands)).then();
-  }
-}
+export class AppModule {}

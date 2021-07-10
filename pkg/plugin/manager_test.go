@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"testing"
 
+	fake2 "github.com/vmware-tanzu/octant/pkg/event/fake"
+
 	"github.com/golang/mock/gomock"
 	"github.com/hashicorp/go-plugin"
 	"github.com/stretchr/testify/assert"
@@ -16,11 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/testutil"
-	dashPlugin "github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/plugin/api"
-	"github.com/vmware/octant/pkg/plugin/fake"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	dashPlugin "github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api"
+	"github.com/vmware-tanzu/octant/pkg/plugin/fake"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func TestDefaultStore(t *testing.T) {
@@ -59,6 +61,7 @@ func TestManager(t *testing.T) {
 	clientFactory := fake.NewMockClientFactory(controller)
 	moduleRegistrar := fake.NewMockModuleRegistrar(controller)
 	actionRegistrar := fake.NewMockActionRegistrar(controller)
+	wsClient := fake2.NewMockWSClientGetter(controller)
 
 	name := "plugin1"
 
@@ -76,7 +79,7 @@ func TestManager(t *testing.T) {
 	})
 
 	apiService := &stubAPIService{}
-	manager := dashPlugin.NewManager(apiService, moduleRegistrar, actionRegistrar, options...)
+	manager := dashPlugin.NewManager(apiService, moduleRegistrar, actionRegistrar, wsClient, options...)
 
 	manager.SetStore(store)
 
@@ -101,6 +104,7 @@ func TestManager_Print(t *testing.T) {
 	store := fake.NewMockManagerStore(controller)
 	moduleRegistrar := fake.NewMockModuleRegistrar(controller)
 	actionRegistrar := fake.NewMockActionRegistrar(controller)
+	wsClient := fake2.NewMockWSClientGetter(controller)
 
 	store.EXPECT().ClientNames().Return([]string{"plugin1", "plugin2"})
 
@@ -131,7 +135,7 @@ func TestManager_Print(t *testing.T) {
 	})
 
 	apiService := &stubAPIService{}
-	manager := dashPlugin.NewManager(apiService, moduleRegistrar, actionRegistrar, options...)
+	manager := dashPlugin.NewManager(apiService, moduleRegistrar, actionRegistrar, wsClient, options...)
 	manager.SetStore(store)
 
 	ctx := context.Background()
@@ -158,14 +162,16 @@ func TestManager_Tabs(t *testing.T) {
 	store := fake.NewMockManagerStore(controller)
 	moduleRegistrar := fake.NewMockModuleRegistrar(controller)
 	actionRegistrar := fake.NewMockActionRegistrar(controller)
+	wsClient := fake2.NewMockWSClientGetter(controller)
 
 	store.EXPECT().ClientNames().Return([]string{"plugin1", "plugin2"})
 
-	ch := make(chan component.Tab)
+	ch := make(chan []component.Tab)
 	tabRunner := dashPlugin.DefaultRunner{
 		RunFunc: func(ctx context.Context, name string, gvk schema.GroupVersionKind, object runtime.Object) error {
-			ch <- component.Tab{Name: name}
-
+			ch <- []component.Tab{
+				{Name: name},
+			}
 			return nil
 		},
 	}
@@ -179,7 +185,7 @@ func TestManager_Tabs(t *testing.T) {
 	})
 
 	apiService := &stubAPIService{}
-	manager := dashPlugin.NewManager(apiService, moduleRegistrar, actionRegistrar, options...)
+	manager := dashPlugin.NewManager(apiService, moduleRegistrar, actionRegistrar, wsClient, options...)
 	manager.SetStore(store)
 
 	ctx := context.Background()

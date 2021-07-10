@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,21 +8,31 @@ package api_test
 import (
 	"context"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/metadata"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/internal/gvk"
-	"github.com/vmware/octant/internal/portforward"
-	portForwardFake "github.com/vmware/octant/internal/portforward/fake"
-	"github.com/vmware/octant/internal/testutil"
-	"github.com/vmware/octant/pkg/plugin/api"
-	"github.com/vmware/octant/pkg/store"
-	storeFake "github.com/vmware/octant/pkg/store/fake"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/portforward"
+	portForwardFake "github.com/vmware-tanzu/octant/internal/portforward/fake"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	storeFake "github.com/vmware-tanzu/octant/pkg/store/fake"
 )
+
+// matches arguments of type context.Context
+var contextType gomock.Matcher = gomock.AssignableToTypeOf(reflect.TypeOf((*context.Context)(nil)).Elem())
+
+// matches arguments of type store.Key
+var storeKeyType gomock.Matcher = gomock.AssignableToTypeOf(reflect.TypeOf((*store.Key)(nil)).Elem())
 
 type apiMocks struct {
 	objectStore *storeFake.MockStore
@@ -46,7 +56,15 @@ func TestAPI(t *testing.T) {
 		Kind:       "Deployment",
 		Name:       "deployment",
 	}
+
 	object := testutil.ToUnstructured(t, testutil.CreateDeployment("deployment"))
+
+	deleteKey := store.Key{
+		Namespace:  "default",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "foo",
+	}
 
 	pfRequest := api.PortForwardRequest{
 		Namespace: "default",
@@ -68,12 +86,17 @@ func TestAPI(t *testing.T) {
 			name: "list",
 			initFunc: func(t *testing.T, mocks *apiMocks) {
 				mocks.objectStore.EXPECT().
-					List(gomock.Any(), gomock.Eq(listKey)).Return(objects, false, nil)
+					List(contextType, gomock.Eq(listKey)).
+					Return(objects, false, nil).
+					Do(func(ctx context.Context, _ store.Key) {
+						require.Equal(t, "bar", ctx.Value(api.DashboardMetadataKey("foo")))
+					})
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
 				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 				defer cancel()
 
+				clientCtx = metadata.AppendToOutgoingContext(clientCtx, "x-octant-foo", "bar")
 				got, err := client.List(clientCtx, listKey)
 				require.NoError(t, err)
 
@@ -83,21 +106,84 @@ func TestAPI(t *testing.T) {
 			},
 		},
 		{
-			name: "get",
+			name: "update",
 			initFunc: func(t *testing.T, mocks *apiMocks) {
 				mocks.objectStore.EXPECT().
-					Get(gomock.Any(), gomock.Eq(getKey)).Return(object, nil)
+					Update(contextType, storeKeyType, gomock.Any()).
+					Return(nil).
+					Do(func(ctx context.Context, _ store.Key, _ func(*unstructured.Unstructured) error) {
+						require.Equal(t, "bar", ctx.Value(api.DashboardMetadataKey("foo")))
+					})
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
 				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 				defer cancel()
 
+				clientCtx = metadata.AppendToOutgoingContext(clientCtx, "x-octant-foo", "bar")
+				err := client.Update(clientCtx, object)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "create",
+			initFunc: func(t *testing.T, mocks *apiMocks) {
+				mocks.objectStore.EXPECT().
+					Create(contextType, gomock.Eq(object)).
+					Return(nil).
+					Do(func(ctx context.Context, _ *unstructured.Unstructured) {
+						require.Equal(t, "bar", ctx.Value(api.DashboardMetadataKey("foo")))
+					})
+			},
+			doFunc: func(t *testing.T, client *api.Client) {
+				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				defer cancel()
+
+				clientCtx = metadata.AppendToOutgoingContext(clientCtx, "x-octant-foo", "bar")
+				err := client.Create(clientCtx, object)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "get",
+			initFunc: func(t *testing.T, mocks *apiMocks) {
+				mocks.objectStore.EXPECT().
+					Get(contextType, gomock.Eq(getKey)).
+					Return(object, nil).
+					Do(func(ctx context.Context, _ store.Key) {
+						require.Equal(t, "bar", ctx.Value(api.DashboardMetadataKey("foo")))
+					})
+			},
+			doFunc: func(t *testing.T, client *api.Client) {
+				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				defer cancel()
+
+				clientCtx = metadata.AppendToOutgoingContext(clientCtx, "x-octant-foo", "bar")
 				got, err := client.Get(clientCtx, getKey)
 				require.NoError(t, err)
 
 				expected := object
 
 				assert.Equal(t, expected, got)
+			},
+		},
+		{
+			name: "delete",
+			initFunc: func(t *testing.T, mocks *apiMocks) {
+				mocks.objectStore.EXPECT().
+					Delete(contextType, storeKeyType).
+					Return(nil).
+					Do(func(ctx context.Context, _ store.Key) {
+						require.Equal(t, "bar", ctx.Value(api.DashboardMetadataKey("foo")))
+					})
+			},
+			doFunc: func(t *testing.T, client *api.Client) {
+				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				defer cancel()
+
+				clientCtx = metadata.AppendToOutgoingContext(clientCtx, "x-octant-foo", "bar")
+				err := client.Delete(clientCtx, deleteKey)
+
+				require.NoError(t, err)
 			},
 		},
 		{
@@ -112,7 +198,7 @@ func TestAPI(t *testing.T) {
 
 				mocks.pf.EXPECT().
 					Create(
-						gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
+						gomock.Any(), gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
 					Return(resp, nil)
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
@@ -152,7 +238,7 @@ func TestAPI(t *testing.T) {
 
 				mocks.pf.EXPECT().
 					Create(
-						gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
+						gomock.Any(), gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
 					Return(resp, nil)
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
@@ -173,6 +259,8 @@ func TestAPI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			controller := gomock.NewController(t)
 			defer controller.Finish()
+
+			viper.SetDefault("client-max-recv-msg-size", 1024*1024*16)
 
 			appObjectStore := storeFake.NewMockStore(controller)
 			pf := portForwardFake.NewMockPortForwarder(controller)

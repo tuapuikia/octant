@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // Section is a wrapper to combine content from multiple describers.
@@ -32,13 +32,28 @@ func NewSection(p, title string, describers ...Describer) *Section {
 }
 
 // Describe generates content.
-func (d *Section) Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error) {
-	list := component.NewList(d.title, nil)
+func (d *Section) Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error) {
+	list, err := d.Component(ctx, namespace, options)
+	if err != nil {
+		return component.EmptyContentResponse, err
+	}
+
+	cr := component.ContentResponse{
+		Components: []component.Component{list},
+		Title:      component.Title(component.NewText(d.title)),
+	}
+
+	return cr, nil
+}
+
+func (d *Section) Component(ctx context.Context, namespace string, options Options) (*component.List, error) {
+	title := component.Title(component.NewText(d.title))
+	list := component.NewList(title, nil)
 
 	for describerIndex := range d.describers {
-		cResponse, err := d.describers[describerIndex].Describe(ctx, prefix, namespace, options)
+		cResponse, err := d.describers[describerIndex].Describe(ctx, namespace, options)
 		if err != nil {
-			return EmptyContentResponse, err
+			return nil, err
 		}
 
 		for componentIndex := range cResponse.Components {
@@ -53,12 +68,7 @@ func (d *Section) Describe(ctx context.Context, prefix, namespace string, option
 		}
 	}
 
-	cr := component.ContentResponse{
-		Components: []component.Component{list},
-		Title:      component.Title(component.NewText(d.title)),
-	}
-
-	return cr, nil
+	return list, nil
 }
 
 // PathFilters returns path filters for the section.

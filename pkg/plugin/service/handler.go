@@ -7,10 +7,10 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/pkg/action"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // Handler is the plugin service helper handler. Functions on this struct are called from Octant.
@@ -68,24 +68,34 @@ func (p *Handler) Print(ctx context.Context, object runtime.Object) (plugin.Prin
 		baseRequest:     newBaseRequest(ctx, p.name),
 		DashboardClient: p.dashboardClient,
 		Object:          object,
+		ClientState:     plugin.ClientStateFrom(ctx),
 	}
 
 	return p.HandlerFuncs.Print(request)
 }
 
-// PrintTab prints a tab for an object.
-func (p *Handler) PrintTab(ctx context.Context, object runtime.Object) (plugin.TabResponse, error) {
-	if p.HandlerFuncs.PrintTab == nil {
-		return plugin.TabResponse{}, nil
+// PrintTabs prints one or more tabs for an object.
+func (p *Handler) PrintTabs(ctx context.Context, object runtime.Object) ([]plugin.TabResponse, error) {
+	if p.HandlerFuncs.PrintTabs == nil {
+		return []plugin.TabResponse{}, nil
 	}
 
 	request := &PrintRequest{
 		baseRequest:     newBaseRequest(ctx, p.name),
 		DashboardClient: p.dashboardClient,
 		Object:          object,
+		ClientState:     plugin.ClientStateFrom(ctx),
 	}
 
-	return p.HandlerFuncs.PrintTab(request)
+	var tabResponses []plugin.TabResponse
+	for _, handlerFunc := range p.HandlerFuncs.PrintTabs {
+		resp, err := handlerFunc(request)
+		if err != nil {
+			return []plugin.TabResponse{}, err
+		}
+		tabResponses = append(tabResponses, resp)
+	}
+	return tabResponses, nil
 }
 
 // ObjectStatus creates status for an object.
@@ -98,13 +108,14 @@ func (p *Handler) ObjectStatus(ctx context.Context, object runtime.Object) (plug
 		baseRequest:     newBaseRequest(ctx, p.name),
 		DashboardClient: p.dashboardClient,
 		Object:          object,
+		ClientState:     plugin.ClientStateFrom(ctx),
 	}
 
 	return p.HandlerFuncs.ObjectStatus(request)
 }
 
 // HandleAction handles actions given a payload.
-func (p *Handler) HandleAction(ctx context.Context, payload action.Payload) error {
+func (p *Handler) HandleAction(ctx context.Context, actionName string, payload action.Payload) error {
 	if p.HandlerFuncs.HandleAction == nil {
 		return nil
 	}
@@ -112,7 +123,9 @@ func (p *Handler) HandleAction(ctx context.Context, payload action.Payload) erro
 	request := &ActionRequest{
 		baseRequest:     newBaseRequest(ctx, p.name),
 		DashboardClient: p.dashboardClient,
+		ActionName:      actionName,
 		Payload:         payload,
+		ClientState:     plugin.ClientStateFrom(ctx),
 	}
 
 	return p.HandlerFuncs.HandleAction(request)
@@ -127,6 +140,7 @@ func (p *Handler) Navigation(ctx context.Context) (navigation.Navigation, error)
 	request := &NavigationRequest{
 		baseRequest:     newBaseRequest(ctx, p.name),
 		DashboardClient: p.dashboardClient,
+		ClientState:     plugin.ClientStateFrom(ctx),
 	}
 
 	return p.HandlerFuncs.Navigation(request)
@@ -139,10 +153,10 @@ func (p *Handler) Content(ctx context.Context, contentPath string) (component.Co
 		return component.ContentResponse{}, nil
 	}
 
-	request := &Request{
+	request := &request{
 		baseRequest:     newBaseRequest(ctx, p.name),
 		dashboardClient: p.dashboardClient,
-		Path:            contentPath,
+		path:            contentPath,
 	}
 
 	return handlerFunc(request)

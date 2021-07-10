@@ -14,6 +14,10 @@ builds:
       - linux
     goarch:
       - amd64
+      - arm
+      - arm64
+    flags:
+      - -tags=embedded
     ldflags: -X "main.buildTime={{.Date}}" -X "main.gitCommit={{.Commit}}" -X "main.version={{.Version}}"
 nfpms:
   -
@@ -21,16 +25,18 @@ nfpms:
       - deb
       - rpm
     vendor: "VMware"
-    homepage: "https://github.com/vmware/octant"
+    homepage: "https://github.com/vmware-tanzu/octant"
     maintainer: Octant Maintainers <project-octant@googlegroups.com>
-    description: "A web-based, highly extensible platform for developers to better understand the complexity of Kubernetes clusters"
+    description: "A highly extensible platform for developers to better understand the complexity of Kubernetes clusters"
     license: "Apache 2.0"
-    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}-{{.Arch}}"
+    file_name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}-{{.Arch}}"
     replacements:
       darwin: macOS
       linux: Linux
       windows: Windows
       amd64: 64bit
+      arm: ARM
+      arm64: ARM64
 archives:
   -
     wrap_in_directory: true

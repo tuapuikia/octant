@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -15,22 +15,27 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/log"
-	dashStrings "github.com/vmware/octant/internal/util/strings"
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/util/kubernetes"
+	dashStrings "github.com/vmware-tanzu/octant/internal/util/strings"
 )
 
 // CRDPathGenFunc is a function that generates a custom resource path.
-type CRDPathGenFunc func(namespace, crdName, name string) (string, error)
+type CRDPathGenFunc func(namespace, crdName, version, name string) (string, error)
 
 // PathLookupFunc looks up paths for an object.
 type PathLookupFunc func(namespace, apiVersion, kind, name string) (string, error)
 
+// ReversePathLookupFunc looks up paths for an object.
+type ReversePathLookupFunc func(path, namespace string) (schema.GroupVersionKind, error)
+
 // ObjectPathConfig is configuration for ObjectPath.
 type ObjectPathConfig struct {
-	ModuleName     string
-	SupportedGVKs  []schema.GroupVersionKind
-	PathLookupFunc PathLookupFunc
-	CRDPathGenFunc CRDPathGenFunc
+	ModuleName            string
+	SupportedGVKs         []schema.GroupVersionKind
+	PathLookupFunc        PathLookupFunc
+	CRDPathGenFunc        CRDPathGenFunc
+	ReversePathLookupFunc ReversePathLookupFunc
 }
 
 // Validate returns an error if the configuration is invalid.
@@ -43,6 +48,10 @@ func (opc *ObjectPathConfig) Validate() error {
 
 	if opc.PathLookupFunc == nil {
 		errorStrings = append(errorStrings, "object path lookup func is nil")
+	}
+
+	if opc.ReversePathLookupFunc == nil {
+		errorStrings = append(errorStrings, "reverse path lookup func is nil")
 	}
 
 	if opc.CRDPathGenFunc == nil {
@@ -59,11 +68,12 @@ func (opc *ObjectPathConfig) Validate() error {
 // ObjectPath contains functions for generating paths for an object. Typically this is a
 // helper which can be embedded in modules.
 type ObjectPath struct {
-	crds           map[string]*unstructured.Unstructured
-	moduleName     string
-	supportedGVKs  []schema.GroupVersionKind
-	lookupFunc     PathLookupFunc
-	crdPathGenFunc CRDPathGenFunc
+	crds              map[string]*unstructured.Unstructured
+	moduleName        string
+	supportedGVKs     []schema.GroupVersionKind
+	lookupFunc        PathLookupFunc
+	reverseLookupFunc ReversePathLookupFunc
+	crdPathGenFunc    CRDPathGenFunc
 
 	mu sync.Mutex
 }
@@ -75,10 +85,11 @@ func NewObjectPath(config ObjectPathConfig) (*ObjectPath, error) {
 	}
 
 	return &ObjectPath{
-		moduleName:     config.ModuleName,
-		supportedGVKs:  config.SupportedGVKs,
-		lookupFunc:     config.PathLookupFunc,
-		crdPathGenFunc: config.CRDPathGenFunc,
+		moduleName:        config.ModuleName,
+		supportedGVKs:     config.SupportedGVKs,
+		lookupFunc:        config.PathLookupFunc,
+		reverseLookupFunc: config.ReversePathLookupFunc,
+		crdPathGenFunc:    config.CRDPathGenFunc,
 	}, nil
 }
 
@@ -109,7 +120,8 @@ func (op *ObjectPath) RemoveCRD(ctx context.Context, crd *unstructured.Unstructu
 	defer op.mu.Unlock()
 
 	if crd == nil {
-		return errors.New("unable to remove nil crd")
+		// nothing to do if crd is nil
+		return nil
 	}
 
 	delete(op.crds, crd.GetName())
@@ -121,24 +133,40 @@ func (op *ObjectPath) RemoveCRD(ctx context.Context, crd *unstructured.Unstructu
 	return nil
 }
 
+// ResetCRDs deletes all the CRD paths ObjectPath is tracking.
+func (op *ObjectPath) ResetCRDs(ctx context.Context) error {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+
+	for k := range op.crds {
+		delete(op.crds, k)
+	}
+
+	return nil
+}
+
 // SupportedGroupVersionKind returns a slice of GVKs this object path can handle.
 func (op *ObjectPath) SupportedGroupVersionKind() []schema.GroupVersionKind {
 	op.mu.Lock()
 	defer op.mu.Unlock()
 
-	gvks := make([]schema.GroupVersionKind, len(op.supportedGVKs))
-	copy(gvks, op.supportedGVKs)
+	list := make([]schema.GroupVersionKind, len(op.supportedGVKs))
+	copy(list, op.supportedGVKs)
 
 	for _, crd := range op.crds {
-		r, err := CRDResourceGVKs(crd)
+		r, err := kubernetes.CRDResources(crd)
 		if err != nil {
 			continue
 		}
 
-		gvks = append(gvks, r...)
+		list = append(list, r...)
 	}
 
-	return gvks
+	return list
+}
+
+func (op *ObjectPath) GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error) {
+	return op.reverseLookupFunc(contentPath, namespace)
 }
 
 // GroupVersionKind returns a path for an object.
@@ -146,13 +174,13 @@ func (op *ObjectPath) GroupVersionKindPath(namespace, apiVersion, kind, name str
 	op.mu.Lock()
 	defer op.mu.Unlock()
 
-	gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
+	g := schema.FromAPIVersionAndKind(apiVersion, kind)
 
 	// if apiVersion matches a crd, build up path dynamically
 	for i := range op.crds {
 		crd := op.crds[i]
 
-		supports, err := crdSupportsGVK(crd, gvk)
+		supports, err := kubernetes.CRDContainsResource(crd, g)
 		if err != nil {
 			return "", err
 		}
@@ -172,135 +200,26 @@ func (op *ObjectPath) GroupVersionKindPath(namespace, apiVersion, kind, name str
 		}
 
 		if dashStrings.Contains(apiVersion, apiVersions) {
-			return op.crdPathGenFunc(namespace, crd.GetName(), name)
+			return op.crdPathGenFunc(namespace, crd.GetName(), g.Version, name)
 		}
+
 	}
 
 	return op.lookupFunc(namespace, apiVersion, kind, name)
 }
 
-// CRDResourceGVKs returns the GVKs contained within a CRD.
-func CRDResourceGVKs(crd *unstructured.Unstructured) ([]schema.GroupVersionKind, error) {
-	apiVersions, err := CRDAPIVersions(crd)
+// CRDAPIVersions returns the group versions that are contained within a CRD.
+func CRDAPIVersions(crd *unstructured.Unstructured) ([]schema.GroupVersion, error) {
+
+	resources, err := kubernetes.CRDResources(crd)
 	if err != nil {
 		return nil, err
 	}
 
-	spec, ok := crd.Object["spec"].(map[string]interface{})
-	if !ok {
-		return nil, errors.New("crd did not have spec")
-	}
-
-	names, ok := spec["names"].(map[string]interface{})
-	if !ok {
-		return nil, errors.New("crd spec did not have names")
-	}
-
-	kind, ok := names["kind"].(string)
-	if !ok {
-		return nil, errors.New("crd spec names did not have kind")
-	}
-
-	var list []schema.GroupVersionKind
-
-	for _, apiVersion := range apiVersions {
-		list = append(list, schema.GroupVersionKind{Group: apiVersion.Group, Version: apiVersion.Version, Kind: kind})
+	list := make([]schema.GroupVersion, len(resources))
+	for i := range resources {
+		list[i] = resources[i].GroupVersion()
 	}
 
 	return list, nil
-}
-
-// CRDAPIVersions returns the group versions that are contained within a CRD.
-func CRDAPIVersions(crd *unstructured.Unstructured) ([]schema.GroupVersion, error) {
-	if crd == nil {
-		return nil, errors.New("crd is nil")
-	}
-
-	var list []schema.GroupVersion
-
-	spec, ok := crd.Object["spec"].(map[string]interface{})
-	if !ok {
-		return nil, errors.New("crd did not have spec")
-	}
-
-	crdName, ok := spec["group"].(string)
-	if !ok {
-		return nil, errors.New("crd spec did not have group")
-	}
-
-	versions, ok := spec["versions"].([]interface{})
-	if !ok {
-		return nil, errors.New("crd spec did not have versions")
-	}
-
-	for _, rawVersion := range versions {
-		version, ok := rawVersion.(map[string]interface{})
-		if !ok {
-			return nil, errors.New("crd version was not an object")
-		}
-
-		versionName, ok := version["name"].(string)
-		if !ok {
-			return nil, errors.New("crd version did not have a name")
-		}
-
-		list = append(list, schema.GroupVersion{Group: crdName, Version: versionName})
-	}
-
-	return list, nil
-}
-
-func crdSupportsGVK(crd *unstructured.Unstructured, gvk schema.GroupVersionKind) (bool, error) {
-	if crd == nil {
-		return false, errors.New("crd is nil")
-	}
-
-	spec, ok := crd.Object["spec"].(map[string]interface{})
-	if !ok {
-		return false, errors.New("crd did not have spec")
-	}
-
-	group, ok := spec["group"].(string)
-	if !ok {
-		return false, errors.New("crd spec did not have group")
-	}
-
-	names, ok := spec["names"].(map[string]interface{})
-	if !ok {
-		return false, errors.New("crd spec did not have names")
-	}
-
-	kind, ok := names["kind"].(string)
-	if !ok {
-		return false, errors.New("crd spec names did not have kind")
-	}
-
-	rawVersions, ok := spec["versions"].([]interface{})
-	if !ok {
-		return false, errors.New("crd spec did not have versions")
-	}
-
-	for _, rawVersion := range rawVersions {
-		version, ok := rawVersion.(map[string]interface{})
-		if !ok {
-			return false, errors.New("crd version was not an object")
-		}
-
-		versionName, ok := version["name"].(string)
-		if !ok {
-			return false, errors.New("crd version did not have a name")
-		}
-
-		current := schema.GroupVersionKind{
-			Group:   group,
-			Kind:    kind,
-			Version: versionName,
-		}
-
-		if current.String() == gvk.String() {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }

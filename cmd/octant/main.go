@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -9,7 +9,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/vmware/octant/internal/commands"
+	"github.com/vmware-tanzu/octant/internal/commands"
 )
 
 // Default variables overridden by ldflags

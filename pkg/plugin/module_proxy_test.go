@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/plugin/fake"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/plugin/fake"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func TestModuleProxy_Name(t *testing.T) {
@@ -50,7 +50,7 @@ func TestModuleProxy_ContentPath(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	got, err := moduleProxy.Content(ctx, "/path", "", "", module.ContentOptions{})
+	got, err := moduleProxy.Content(ctx, "/path", module.ContentOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, response, got)

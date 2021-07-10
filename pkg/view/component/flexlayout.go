@@ -1,19 +1,25 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import (
+	"errors"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
+)
 
 const (
+	// WidthFull is a full width section.
+	WidthFull int = 24
 	// WidthQuarter is a quarter width section.
 	WidthQuarter int = 6
 	// WidthHalf is a half width section.
 	WidthHalf int = 12
-	// WidthFull is a full width section.
-	WidthFull int = 24
+	// WidthThird is a third width section.
+	WidthThird int = 8
 )
 
 // FlexLayoutItem is an item in a flex layout.
@@ -47,30 +53,69 @@ type FlexLayoutSection []FlexLayoutItem
 
 // FlexLayoutConfig is configuration for the flex layout view.
 type FlexLayoutConfig struct {
-	Sections []FlexLayoutSection `json:"sections,omitempty"`
+	Sections    []FlexLayoutSection `json:"sections,omitempty"`
+	ButtonGroup *ButtonGroup        `json:"buttonGroup,omitempty"`
+	Alert       *Alert              `json:"alert,omitempty"`
+}
+
+func (f *FlexLayoutConfig) UnmarshalJSON(data []byte) error {
+	x := struct {
+		Sections    []FlexLayoutSection `json:"sections,omitempty"`
+		ButtonGroup *TypedObject        `json:"buttonGroup,omitempty"`
+		Alert       *Alert              `json:"alert,omitempty"`
+	}{}
+
+	if err := json.Unmarshal(data, &x); err != nil {
+		return err
+	}
+
+	if x.ButtonGroup != nil {
+		component, err := x.ButtonGroup.ToComponent()
+		if err != nil {
+			return err
+		}
+
+		buttonGroup, ok := component.(*ButtonGroup)
+		if !ok {
+			return errors.New("item was not a buttonGroup")
+		}
+		f.ButtonGroup = buttonGroup
+	}
+
+	f.Sections = x.Sections
+	f.Alert = x.Alert
+
+	return nil
 }
 
 // FlexLayout is a flex layout view.
+//
+// +octant:component
 type FlexLayout struct {
-	base
+	Base
 	Config FlexLayoutConfig `json:"config,omitempty"`
 }
 
 // NewFlexLayout creates an instance of FlexLayout.
 func NewFlexLayout(title string) *FlexLayout {
 	return &FlexLayout{
-		base: newBase(typeFlexLayout, TitleFromString(title)),
+		Base: newBase(TypeFlexLayout, TitleFromString(title)),
+		Config: FlexLayoutConfig{
+			ButtonGroup: NewButtonGroup(),
+		},
 	}
 }
 
-// GetMetadata returns the metadata for the flex layout view.
-func (fl *FlexLayout) GetMetadata() Metadata {
-	return fl.Metadata
-}
+var _ Component = (*FlexLayout)(nil)
 
 // AddSections adds one or more sections to the flex layout.
 func (fl *FlexLayout) AddSections(sections ...FlexLayoutSection) {
 	fl.Config.Sections = append(fl.Config.Sections, sections...)
+}
+
+// SetAlert sets an alert for the .
+func (fl *FlexLayout) SetAlert(alert Alert) {
+	fl.Config.Alert = &alert
 }
 
 type flexLayoutMarshal FlexLayout
@@ -78,20 +123,29 @@ type flexLayoutMarshal FlexLayout
 // MarshalJSON marshals the flex layout to JSON.
 func (fl *FlexLayout) MarshalJSON() ([]byte, error) {
 	x := flexLayoutMarshal(*fl)
-	x.Metadata.Type = typeFlexLayout
+	x.Metadata.Type = TypeFlexLayout
 	return json.Marshal(&x)
+}
+
+func (fl *FlexLayout) SetButtonGroup(group *ButtonGroup) {
+	fl.Config.ButtonGroup = group
 }
 
 // Tab represents a tab. A tab is a flex layout with a name.
 type Tab struct {
-	Name     string
-	Contents FlexLayout
+	Name     string     `json:"name"`
+	Contents FlexLayout `json:"contents"`
 }
 
 // NewTabWithContents creates a tab with contents.
 func NewTabWithContents(flexLayout FlexLayout) *Tab {
+	name, err := TitleFromTitleComponent(flexLayout.Title)
+	if err != nil {
+		name = ""
+	}
+
 	return &Tab{
-		Name:     "",
+		Name:     name,
 		Contents: flexLayout,
 	}
 }

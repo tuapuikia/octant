@@ -1,10 +1,15 @@
 syntax = "proto3";
 package dashboard;
 
+option go_package = "github.com/vmware-tanzu/octant/pkg/plugin/dashboard";
+
 message Empty {}
 
 message ContentRequest {
+    reserved 2;
+    reserved "clientID";
     string path = 1;
+    bytes client_state = 3;
 }
 
 message ContentResponse {
@@ -12,14 +17,22 @@ message ContentResponse {
 }
 
 message HandleActionRequest {
-    bytes payload = 1;
+    reserved 3;
+    reserved "clientID";
+    string action_name = 1;
+    bytes payload = 2;
+    bytes client_state = 4;
 }
 
 message HandleActionResponse {
 
 }
 
-message NavigationRequest {}
+message NavigationRequest {
+    reserved 1;
+    reserved "clientID";
+    bytes client_state = 2;
+}
 
 message NavigationResponse {
     message Navigation {
@@ -59,7 +72,10 @@ message RegisterResponse {
 }
 
 message ObjectRequest {
+    reserved 2;
+    reserved "clientID";
     bytes object = 1;
+    bytes client_state = 3;
 }
 
 message PrintResponse {
@@ -74,6 +90,10 @@ message PrintResponse {
 }
 
 message PrintTabResponse {
+    repeated PrintTab tabs = 1;
+}
+
+message PrintTab {
     string name = 1;
     bytes layout = 2;
 }
@@ -94,7 +114,7 @@ service Plugin {
     rpc Register(RegisterRequest) returns (RegisterResponse);
     rpc Print(ObjectRequest) returns (PrintResponse);
     rpc ObjectStatus(ObjectRequest) returns (ObjectStatusResponse);
-    rpc PrintTab(ObjectRequest) returns (PrintTabResponse);
+    rpc PrintTabs(ObjectRequest) returns (PrintTabResponse);
     rpc WatchAdd(WatchRequest) returns (Empty);
     rpc WatchUpdate(WatchRequest) returns (Empty);
     rpc WatchDelete(WatchRequest) returns (Empty);

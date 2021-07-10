@@ -1,15 +1,16 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"path"
 	"testing"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,28 +53,32 @@ func Test_ResourceViewer_Marshal(t *testing.T) {
 							APIVersion: "v1",
 							Kind:       "Service",
 							Status:     "ok",
+							Path:       NewLink("", "my-nginx", "/overview/namespace/default/discovery-and-load-balancing/services/my-nginx"),
 						},
 						"71c2b4eb-2949-11e9-b356-42010a8000e5": Node{
 							Name:       "nginx-deployment",
 							APIVersion: "apps/v1",
 							Kind:       "Deployment",
 							Status:     "ok",
+							Path:       NewLink("", "nginx-deployment", "/overview/namespace/default/workloads/deployments/nginx-deployment"),
 						},
 						"8682460a-29b5-11e9-b356-42010a8000e5": Node{
 							Name:       "nginx-deployment-56c74bb7cd",
 							APIVersion: "extensions/v1beta1",
 							Kind:       "ReplicaSet",
 							Status:     "ok",
+							Path:       NewLink("", "nginx-deployment-56c74bb7cd", "/overview/namespace/default/workloads/replica-sets/nginx-deployment-56c74bb7cd"),
 						},
 						"bf4800b5b6602c4c78ba3b654af02b3b": Node{
 							Name:       "nginx-deployment-56c74bb7cd pods",
 							APIVersion: "v1",
 							Kind:       "Pod",
 							Status:     "ok",
+							Path:       NewLink("", "nginx-deployment-56c74bb7cd pods", "/overview/namespace/default/workloads/pods/nginx-deployment-56c74bb7cd pods"),
 						},
 					},
 				},
-				base: newBase(typeResourceViewer, TitleFromString("Resource Viewer")),
+				Base: newBase(TypeResourceViewer, TitleFromString("Resource Viewer")),
 			},
 			expectedPath: "resource_viewer.json",
 		},
@@ -126,7 +131,6 @@ func Test_ResourceViewer_AddEdge_missing_node(t *testing.T) {
 
 	node := Node{}
 	rv.AddNode("nodeID", node)
-
 
 	require.Error(t, rv.AddEdge("nodeID", "childID", EdgeTypeExplicit))
 }

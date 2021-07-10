@@ -1,4 +1,4 @@
-// Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+// Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -27,6 +27,9 @@ export class ActivatedRouteStub {
 
   private urlSubject = new ReplaySubject<UrlSegment[]>();
   readonly url = this.urlSubject.asObservable();
+
+  private queryParamsSubject = new ReplaySubject<Params>();
+  readonly queryParams = this.queryParamsSubject.asObservable();
 
   /** Set the paramMap observable's next value */
   setParamMap(params?: Params) {

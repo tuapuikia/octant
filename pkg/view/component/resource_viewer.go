@@ -1,13 +1,15 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
+	"fmt"
 	"strings"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/pkg/errors"
 )
@@ -64,7 +66,76 @@ type Node struct {
 	Kind       string      `json:"kind,omitempty"`
 	Status     NodeStatus  `json:"status,omitempty"`
 	Details    []Component `json:"details,omitempty"`
+	Properties []Property  `json:"properties,omitempty"`
 	Path       *Link       `json:"path,omitempty"`
+}
+
+type Property struct {
+	Label string    `json:"label,omitempty"`
+	Value Component `json:"value,omitempty"`
+}
+
+type PropertyObject struct {
+	Label string       `json:"label,omitempty"`
+	Value *TypedObject `json:"value,omitempty"`
+}
+
+func (n *Node) UnmarshalJSON(data []byte) error {
+	x := struct {
+		Name       string           `json:"name,omitempty"`
+		APIVersion string           `json:"apiVersion,omitempty"`
+		Kind       string           `json:"kind,omitempty"`
+		Status     NodeStatus       `json:"status,omitempty"`
+		Details    []*TypedObject   `json:"details,omitempty"`
+		Properties []PropertyObject `json:"properties,omitempty"`
+		Path       *TypedObject     `json:"path,omitempty"`
+	}{}
+
+	if err := json.Unmarshal(data, &x); err != nil {
+		return err
+	}
+
+	n.Name = x.Name
+	n.APIVersion = x.APIVersion
+	n.Kind = x.Kind
+	n.Status = x.Status
+
+	if x.Details != nil {
+		n.Details = make([]Component, len(x.Details))
+	}
+	for i, detail := range x.Details {
+		dc, err := detail.ToComponent()
+		if err != nil {
+			return errors.Wrap(err, "unmarshal-ing detail")
+		}
+		n.Details[i] = dc
+	}
+
+	if x.Properties != nil {
+		n.Properties = make([]Property, len(x.Properties))
+	}
+	for i, property := range x.Properties {
+		comp, err := property.Value.ToComponent()
+		if err != nil {
+			return errors.Wrap(err, "unmarshal-ing property")
+		}
+		prop := Property{property.Label, comp}
+		n.Properties[i] = prop
+	}
+
+	if x.Path != nil {
+		p, err := x.Path.ToComponent()
+		if err != nil {
+			return errors.Wrap(err, "unmarshal-ing detail")
+		}
+		l, ok := p.(*Link)
+		if !ok {
+			return fmt.Errorf("path must be a link, found %q", x.Path.Metadata.Type)
+		}
+		n.Path = l
+	}
+
+	return nil
 }
 
 // ResourceViewerConfig is configuration for a resource viewer.
@@ -75,15 +146,17 @@ type ResourceViewerConfig struct {
 }
 
 // ResourceView is a resource viewer component.
+//
+// +octant:component
 type ResourceViewer struct {
-	base
+	Base
 	Config ResourceViewerConfig `json:"config,omitempty"`
 }
 
 // NewResourceViewer creates a resource viewer component.
 func NewResourceViewer(title string) *ResourceViewer {
 	return &ResourceViewer{
-		base: newBase(typeResourceViewer, TitleFromString(title)),
+		Base: newBase(TypeResourceViewer, TitleFromString(title)),
 		Config: ResourceViewerConfig{
 			Edges: AdjList{},
 			Nodes: Nodes{},
@@ -152,7 +225,7 @@ func (rv *ResourceViewer) MarshalJSON() ([]byte, error) {
 	}
 
 	m := resourceViewerMarshal(*rv)
-	m.Metadata.Type = typeResourceViewer
+	m.Metadata.Type = TypeResourceViewer
 	m.Metadata.Title = rv.Metadata.Title
 
 	return json.Marshal(&m)

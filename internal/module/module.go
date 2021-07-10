@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,18 +7,17 @@ package module
 
 import (
 	"context"
-	"net/http"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/octant"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
-//go:generate mockgen -destination=./fake/mock_module.go -package=fake github.com/vmware/octant/internal/module Module
+//go:generate mockgen -destination=./fake/mock_module.go -package=fake github.com/vmware-tanzu/octant/internal/module Module
 
 // ContentOptions are additional options for content generation
 type ContentOptions struct {
@@ -29,10 +28,12 @@ type ContentOptions struct {
 type Module interface {
 	// Name is the name of the module.
 	Name() string
-	// Handlers are additional handlers for the module
-	Handlers(ctx context.Context) map[string]http.Handler
+	// Description is a description for this module
+	Description() string
+	// ClientRequestHandlers are handlers for handling client requests.
+	ClientRequestHandlers() []octant.ClientRequestHandler
 	// Content generates content for a path.
-	Content(ctx context.Context, contentPath, prefix, namespace string, opts ContentOptions) (component.ContentResponse, error)
+	Content(ctx context.Context, contentPath string, opts ContentOptions) (component.ContentResponse, error)
 	// ContentPath will be used to construct content paths.
 	ContentPath() string
 	// Navigation returns navigation entries for this module.
@@ -62,4 +63,9 @@ type Module interface {
 
 	// RemoveCRD removes a CRD this module was responsible for.
 	RemoveCRD(ctx context.Context, crd *unstructured.Unstructured) error
+
+	// ResetCRDs removes all CRDs this module is responsible for.
+	ResetCRDs(ctx context.Context) error
+
+	GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error)
 }

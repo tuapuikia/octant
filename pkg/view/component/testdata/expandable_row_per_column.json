@@ -1,0 +1,26 @@
+{
+  "metadata": {
+    "type": "expandableRowDetail"
+  },
+  "config": {
+    "replace": false,
+    "body": [
+      {
+        "metadata": {
+          "type": "text"
+        },
+        "config": {
+          "value": "test"
+        }
+      },
+      {
+        "metadata": {
+          "type": "text"
+        },
+        "config": {
+          "value": "test2"
+        }
+      }
+    ]
+  }
+}

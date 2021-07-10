@@ -1,12 +1,12 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package kubeconfig
 
 import (
-	"fmt"
+	"context"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -15,7 +15,57 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/vmware-tanzu/octant/internal/cluster"
 )
+
+func Test_NewKubeConfigs(t *testing.T) {
+	kubeConfig := filepath.Join("testdata", "kubeconfig.yaml")
+	config := cluster.RESTConfigOptions{}
+
+	_, err := NewKubeConfigContextManager(
+		context.TODO(),
+		WithKubeConfigList(kubeConfig),
+		FromClusterOption(cluster.WithRESTConfigOptions(config)),
+	)
+	require.NoError(t, err)
+}
+
+func Test_SwitchContextUpdatesCurrentContext(t *testing.T) {
+	kubeConfigs, err := NewKubeConfigContextManager(
+		context.TODO(),
+		WithKubeConfigList(filepath.Join("testdata", "kubeconfig.yaml")),
+	)
+	require.NoError(t, err)
+
+	kubeConfigs.SwitchContext(context.TODO(), "other-context")
+
+	require.Equal(t, "other-context", kubeConfigs.CurrentContext())
+}
+
+func Test_SwitchContextToEmptyUpdatesCurrentContextFromFileSystem(t *testing.T) {
+	kubeConfigs, err := NewKubeConfigContextManager(
+		context.TODO(),
+		WithKubeConfigList(filepath.Join("testdata", "kubeconfig.yaml")),
+	)
+	require.NoError(t, err)
+
+	kubeConfigs.SwitchContext(context.TODO(), "")
+
+	require.Equal(t, "my-cluster", kubeConfigs.CurrentContext())
+}
+
+func Test_SwitchContextUpdatesClientNamespace(t *testing.T) {
+	kubeConfigs, err := NewKubeConfigContextManager(
+		context.TODO(),
+		WithKubeConfigList(filepath.Join("testdata", "kubeconfig.yaml")),
+	)
+	require.NoError(t, err)
+
+	kubeConfigs.SwitchContext(context.TODO(), "other-context")
+
+	require.Equal(t, "non-default", kubeConfigs.ClusterClient().DefaultNamespace())
+}
 
 func TestFSLoader_Load(t *testing.T) {
 	dir, err := ioutil.TempDir("", "loader-test")
@@ -34,19 +84,28 @@ func TestFSLoader_Load(t *testing.T) {
 		paths = append(paths, kubeConfigPath)
 	}
 
-	l := NewFSLoader()
-
-	kc, err := l.Load(strings.Join(paths, ":"))
+	kc, err := NewKubeConfigContextManager(
+		context.TODO(),
+		WithKubeConfigList(strings.Join(paths, string(os.PathListSeparator))),
+	)
 	require.NoError(t, err)
 
-	expected := &KubeConfig{
-		Contexts: []Context{
-			{Name: "dev-frontend"},
-			{Name: "dev-storage"},
-			{Name: "exp-scratch"},
-		},
-		CurrentContext: "dev-frontend",
-	}
+	assert.Equal(t, "dev-frontend", kc.CurrentContext())
+	assert.Equal(t, []Context{
+		{Name: "dev-frontend"},
+		{Name: "dev-storage"},
+		{Name: "exp-scratch"},
+	}, kc.Contexts())
+}
 
-	assert.Equal(t, fmt.Sprint(*expected), fmt.Sprint(*kc))
+func Test_NewKubeConfigNoCluster(t *testing.T) {
+	noClusterOptions := KubeConfigOption{nil, nil}
+
+	_, err := NewKubeConfigContextManager(
+		context.TODO(),
+		WithKubeConfigList(filepath.Join("testdata", "kubeconfig.yaml")),
+		FromClusterOption(cluster.WithRESTConfigOptions(cluster.RESTConfigOptions{})),
+		noClusterOptions,
+	)
+	require.NoError(t, err)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,6 +7,7 @@ package plugin_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -16,18 +17,20 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/gvk"
-	"github.com/vmware/octant/internal/testutil"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/plugin/fake"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/plugin/fake"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func TestDefaultRunner(t *testing.T) {
 	counter := 0
-
+	var m sync.Mutex
 	pr := plugin.DefaultRunner{
 		RunFunc: func(ctx context.Context, name string, gvk schema.GroupVersionKind, object runtime.Object) error {
+			m.Lock()
+			defer m.Unlock()
 			counter++
 			return nil
 		},
@@ -159,15 +162,25 @@ func Test_TabRunner(t *testing.T) {
 	store.EXPECT().
 		GetService(gomock.Eq("plugin1")).Return(service, nil)
 
-	tabResponse := plugin.TabResponse{
-		Tab: &component.Tab{},
+	tabResponse := []plugin.TabResponse{
+		{
+			Tab: &component.Tab{},
+		},
 	}
-	tab := component.Tab{}
+	tabs := []component.Tab{
+		{
+			Name: "",
+			Contents: component.FlexLayout{
+				Base:   component.Base{},
+				Config: component.FlexLayoutConfig{},
+			},
+		},
+	}
 
 	service.EXPECT().
-		PrintTab(gomock.Any(), gomock.Eq(object)).Return(tabResponse, nil)
+		PrintTabs(gomock.Any(), gomock.Eq(object)).Return(tabResponse, nil)
 
-	ch := make(chan component.Tab)
+	ch := make(chan []component.Tab)
 	defer close(ch)
 
 	runner := plugin.TabRunner(store, ch)
@@ -175,7 +188,7 @@ func Test_TabRunner(t *testing.T) {
 	done := make(chan bool)
 	go func() {
 		resp := <-ch
-		assert.Equal(t, tab, resp)
+		assert.Equal(t, tabs, resp)
 		done <- true
 	}()
 

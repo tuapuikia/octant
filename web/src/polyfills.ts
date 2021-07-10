@@ -1,9 +1,9 @@
-// Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+// Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 
 /**
- * This file includes polyfills needed by Angular and is loaded before the app.
+ * This file includes polyfills needed by Angular and is loaded before the home.
  * You can add your own extra polyfills to this file.
  *
  * This file is divided into 2 sections:
@@ -64,3 +64,14 @@ import 'zone.js/dist/zone'; // Included with Angular CLI.
 /***************************************************************************************************
  * APPLICATION IMPORTS
  */
+
+// Following is required for ng-monaco-editor v2.2.2 to work with angular 10
+// Unfortunately currently latest version of ng-monaco-editor (v2.3.0) is also failing
+// with 'Cannot redeclare block-scoped variable' error.
+// After that is fixed in ng-monaco-editor, we should be able to remove this block.
+declare module '@angular/core' {
+  interface ModuleWithProviders<T = any> {
+    ngModule: Type<T>;
+    providers?: Provider[];
+  }
+}

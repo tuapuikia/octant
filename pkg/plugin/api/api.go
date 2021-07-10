@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,16 +7,18 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/pkg/plugin/api/proto"
+	"github.com/spf13/viper"
+
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
+
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api/proto"
 )
 
-// API controlls the dashboard API service.
+// API controls the dashboard API service.
 type API interface {
 	// Addr is the address of the API service.
 	Addr() string
@@ -30,11 +32,13 @@ type grpcAPI struct {
 	listener net.Listener
 }
 
+const dashServiceAddress = "127.0.0.1:0"
+
 var _ API = (*grpcAPI)(nil)
 
 // New creates a new API instance for DashService.
 func New(service Service) (API, error) {
-	listener, err := net.Listen("tcp", "localhost:0")
+	listener, err := net.Listen("tcp", dashServiceAddress)
 	if err != nil {
 		return nil, errors.Wrap(err, "create listener")
 	}
@@ -53,14 +57,16 @@ func (a *grpcAPI) Start(ctx context.Context) error {
 		service: a.Service,
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.MaxRecvMsgSize(viper.GetInt("client-max-recv-msg-size")),
+	)
+
 	proto.RegisterDashboardServer(s, dashboardServer)
 
 	logger.Debugf("dashboard plugin api is starting")
 	go func() {
 		if err := s.Serve(a.listener); err != nil {
-			fmt.Println("it broke?", err)
-			logger.Errorf("unable to serve GRPC: %v", err)
+			logger.WithErr(err).Errorf("unable to serve GRPC")
 			return
 		}
 	}()

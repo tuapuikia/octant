@@ -1,0 +1,109 @@
+/*!
+ * Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+@import '_variables';
+
+:host-context(body) {
+  --background-color: #fafafa;
+  --text-color: #575757;
+}
+
+:host-context(body.dark) {
+  --background-color: #1b2a32;
+  --text-color: #acbac3;
+}
+
+path#single-path {
+  stroke-width: 0;
+}
+
+.svg {
+  path {
+    stroke: var(--background-color);
+    stroke-width: 1;
+  }
+
+  path:hover {
+    filter: url(#darker-filter);
+    stroke-width: 0;
+  }
+}
+
+.chart-text {
+  font: 16px/1em 'Metropolis', Arial, sans-serif;
+  fill: #fff;
+  -moz-transform: translateY(0.25em);
+  -ms-transform: translateY(0.25em);
+  -webkit-transform: translateY(0.25em);
+  transform: translateY(0.25em);
+
+  .chart-number {
+    font-size: 0.6em;
+    fill: var(--text-color);
+    line-height: 1;
+    text-anchor: middle;
+    -moz-transform: translateY(-0.25em);
+    -ms-transform: translateY(-0.25em);
+    -webkit-transform: translateY(-0.25em);
+    transform: translateY(-0.25em);
+  }
+
+  .chart-label {
+    font-size: 0.2em;
+    fill: var(--text-color);
+    text-transform: uppercase;
+    text-anchor: middle;
+    -moz-transform: translateY(0.7em);
+    -ms-transform: translateY(0.7em);
+    -webkit-transform: translateY(0.7em);
+    transform: translateY(0.7em);
+  }
+}
+
+.donut-text {
+  :host-context(body) {
+    --text-color: #575757;
+  }
+  :host-context(body.dark) {
+    --text-color: #acbac3;
+  }
+
+  .chart-number {
+    font-size: 3rem;
+    fill: var(--text-color);
+    line-height: 1;
+    text-anchor: middle;
+    -moz-transform: translateY(0.5rem);
+    -ms-transform: translateY(0.5rem);
+    -webkit-transform: translateY(0.5rem);
+    transform: translateY(0.5rem);
+  }
+
+  .chart-label {
+    font-size: 1rem;
+    fill: var(--text-color);
+    text-transform: uppercase;
+    text-anchor: middle;
+    -moz-transform: translateY(1.9em);
+    -ms-transform: translateY(1.9em);
+    -webkit-transform: translateY(1.9em);
+    transform: translateY(1.9rem);
+  }
+}
+
+.donut-tooltip {
+  color: var(--tooltip-text-color);
+  background-color: var(--selection-color);
+  display: block;
+  z-index: 900;
+  position: fixed;
+  bottom: unset;
+  left: unset;
+  right: unset;
+  top: unset;
+  width: auto;
+  height: auto;
+  padding: 6px 9px;
+  pointer-events: none;
+}

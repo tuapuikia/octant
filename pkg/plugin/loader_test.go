@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,30 +8,96 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func Test_AvailablePlugins(t *testing.T) {
+func Test_PluginDirs(t *testing.T) {
+	replacer := strings.NewReplacer("-", "_")
+	viper.SetEnvKeyReplacer(replacer)
+	viper.SetEnvPrefix("OCTANT")
+	viper.AutomaticEnv()
+
 	tests := []struct {
-		homePath string
-		envVar   string
+		expectedPaths []string
+		homePath      string
+		customPath    string
+		key           string
 	}{
 		{
-			homePath: filepath.Join("/home", "user"),
-			envVar:   "OCTANT_PLUGIN_PATH",
+			homePath:      filepath.Join("/home", "userA"),
+			expectedPaths: []string{filepath.Join("/home", "userA", ".config", "octant", "plugins")},
 		},
 		{
-			homePath: filepath.Join("/home", "xdg_config_path"),
-			envVar:   "XDG_CONFIG_HOME",
+			homePath:      filepath.Join("/home", "userB"),
+			expectedPaths: []string{filepath.Join("/home", "userB", ".config", "octant", "plugins")},
+		},
+		{
+			homePath:   filepath.Join("/home", "userC"),
+			customPath: filepath.Join("/my", "custom", "path"),
+			expectedPaths: []string{
+				filepath.Join("/my", "custom", "path"),
+				filepath.Join("/home", "userC", ".config", "octant", "plugins"),
+			},
 		},
 	}
 
 	for _, test := range tests {
-		defer os.Unsetenv(test.envVar)
+		viper.Set("home", test.homePath)
+
+		fs := afero.NewMemMapFs()
+		for _, expectedPath := range test.expectedPaths {
+			err := fs.MkdirAll(expectedPath, 0700)
+			require.NoError(t, err, "unable to create test home directory")
+		}
+
+		if test.customPath != "" {
+			err := fs.MkdirAll(test.customPath, 0700)
+			require.NoError(t, err, "unable to create test home directory")
+			viper.Set("plugin-path", test.customPath)
+		}
+
+		c := &defaultConfig{
+			fs: fs,
+			os: "unix",
+		}
+
+		results, err := c.PluginDirs(test.homePath)
+		require.NoError(t, err)
+		assert.Equal(t, test.expectedPaths, results)
+	}
+}
+
+func Test_AvailablePlugins(t *testing.T) {
+	tests := []struct {
+		homePath string
+		key      string
+	}{
+		{
+			homePath: filepath.Join("/home", "user"),
+			key:      "plugin-path",
+		},
+		{
+			homePath: filepath.Join("/home", "xdg_config_path"),
+			key:      "xdg-config-home",
+		},
+		{
+			homePath: filepath.Join("/windows", "test"),
+			key:      "windows-test",
+		},
+	}
+
+	for _, test := range tests {
+		replacer := strings.NewReplacer("-", "_")
+		viper.SetEnvKeyReplacer(replacer)
+		viper.SetEnvPrefix("OCTANT")
+		viper.AutomaticEnv()
+
 		fs := afero.NewMemMapFs()
 
 		c := &defaultConfig{
@@ -41,22 +107,45 @@ func Test_AvailablePlugins(t *testing.T) {
 			},
 		}
 
-		switch test.envVar {
-		case "OCTANT_PLUGIN_PATH":
-			customPath := "/example/test"
-			envPaths := customPath + ":/another/one"
-			os.Setenv(test.envVar, envPaths)
+		switch test.key {
+		case "windows-test":
+			c.os = "windows"
+			configPath := filepath.Join(test.homePath, configDir, "plugins")
+			err := fs.MkdirAll(configPath, 0700)
+			require.NoError(t, err, "unable to create test home directory")
+
+			stagePlugin := func(t *testing.T, path string, name string, mode os.FileMode) {
+				p := filepath.Join(path, name)
+				err = afero.WriteFile(fs, p, []byte("guts"), mode)
+				require.NoError(t, err)
+			}
+
+			// Non-executable UNIX permissions but OS is Windows
+			stagePlugin(t, configPath, "a-plugin", 0600)
+			stagePlugin(t, configPath, "e-plugin", 0755)
+
+			got, err := AvailablePlugins(c)
+			require.NoError(t, err)
+
+			expected := []string{
+				filepath.Join(configPath, "a-plugin"),
+				filepath.Join(configPath, "e-plugin"),
+			}
+			assert.Equal(t, expected, got)
+		case "plugin-path":
+			c.os = "unix"
+			customPath := filepath.Join("/example", "test")
+			envPaths := customPath + string(filepath.ListSeparator) + filepath.Join("/another", "one")
+			viper.Set("plugin-path", envPaths)
 
 			configPath := filepath.Join(test.homePath, ".config", configDir, "plugins")
 
 			err := fs.MkdirAll(configPath, 0700)
 			require.NoError(t, err, "unable to create test home directory")
 
-			if os.Getenv(test.envVar) != "" {
-				for _, path := range filepath.SplitList(envPaths) {
-					err := fs.MkdirAll(path, 0700)
-					require.NoError(t, err, "unable to create directory from environment variable")
-				}
+			for _, path := range filepath.SplitList(envPaths) {
+				err := fs.MkdirAll(path, 0700)
+				require.NoError(t, err, "unable to create directory from environment variable")
 			}
 
 			stagePlugin := func(t *testing.T, path string, name string, mode os.FileMode) {
@@ -74,21 +163,19 @@ func Test_AvailablePlugins(t *testing.T) {
 			require.NoError(t, err)
 
 			expected := []string{
-				"/example/test/e-plugin",
-				"/home/user/.config/octant/plugins/a-plugin",
-				"/home/user/.config/octant/plugins/z-plugin",
+				filepath.Join("/example", "test", "e-plugin"),
+				filepath.Join(configPath, "a-plugin"),
+				filepath.Join(configPath, "z-plugin"),
 			}
 
 			assert.Equal(t, expected, got)
 
-		case "XDG_CONFIG_HOME":
-			xdgPath := "/home/xdg_config_path"
-			os.Setenv(test.envVar, xdgPath)
-
+		case "xdg-config-home":
 			configPath := filepath.Join(test.homePath, configDir, "plugins")
-
 			err := fs.MkdirAll(configPath, 0700)
 			require.NoError(t, err, "unable to create test home directory")
+			viper.Set("xdg-config-home", test.homePath)
+			viper.Set("plugin-path", "")
 
 			stagePlugin := func(t *testing.T, path string, name string, mode os.FileMode) {
 				p := filepath.Join(path, name)
@@ -102,7 +189,7 @@ func Test_AvailablePlugins(t *testing.T) {
 			require.NoError(t, err)
 
 			expected := []string{
-				"/home/xdg_config_path/octant/plugins/a-plugin",
+				filepath.Join("/home", "xdg_config_path", "octant", "plugins", "a-plugin"),
 			}
 
 			assert.Equal(t, expected, got)

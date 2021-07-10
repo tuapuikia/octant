@@ -1,18 +1,18 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package plugin
 
 import (
-	"encoding/json"
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin/dashboard"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin/dashboard"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func convertToCapabilities(in *dashboard.RegisterResponse_Capabilities) Capabilities {
@@ -33,7 +33,7 @@ func convertToCapabilities(in *dashboard.RegisterResponse_Capabilities) Capabili
 	return c
 }
 
-func convertFromCapabilities(in Capabilities) dashboard.RegisterResponse_Capabilities {
+func convertFromCapabilities(in Capabilities) *dashboard.RegisterResponse_Capabilities {
 	c := dashboard.RegisterResponse_Capabilities{
 		SupportsPrinterStatus: convertFromGroupVersionKindList(in.SupportsObjectStatus),
 		SupportsPrinterConfig: convertFromGroupVersionKindList(in.SupportsPrinterConfig),
@@ -44,14 +44,14 @@ func convertFromCapabilities(in Capabilities) dashboard.RegisterResponse_Capabil
 		ActionNames:           in.ActionNames,
 	}
 
-	return c
+	return &c
 }
 
 func convertToGroupVersionKindList(in []*dashboard.RegisterResponse_GroupVersionKind) []schema.GroupVersionKind {
 	var list []schema.GroupVersionKind
 
 	for i := range in {
-		list = append(list, convertToGroupVersionKind(*in[i]))
+		list = append(list, convertToGroupVersionKind(in[i]))
 	}
 
 	return list
@@ -67,7 +67,7 @@ func convertFromGroupVersionKindList(in []schema.GroupVersionKind) []*dashboard.
 	return list
 }
 
-func convertToGroupVersionKind(in dashboard.RegisterResponse_GroupVersionKind) schema.GroupVersionKind {
+func convertToGroupVersionKind(in *dashboard.RegisterResponse_GroupVersionKind) schema.GroupVersionKind {
 	return schema.GroupVersionKind{
 		Group:   in.Group,
 		Version: in.Version,
@@ -89,10 +89,9 @@ func convertToNavigation(in *dashboard.NavigationResponse_Navigation) navigation
 	}
 
 	out := navigation.Navigation{
-		Title:      in.Title,
-		Path:       in.Path,
-		IconName:   in.IconName,
-		IconSource: in.IconSource,
+		Title:    in.Title,
+		Path:     in.Path,
+		IconName: in.IconName,
 	}
 
 	for _, child := range in.Children {
@@ -103,27 +102,26 @@ func convertToNavigation(in *dashboard.NavigationResponse_Navigation) navigation
 	return out
 }
 
-func convertFromNavigation(in navigation.Navigation) dashboard.NavigationResponse_Navigation {
+func convertFromNavigation(in navigation.Navigation) *dashboard.NavigationResponse_Navigation {
 	out := dashboard.NavigationResponse_Navigation{
-		Title:      in.Title,
-		Path:       in.Path,
-		IconName:   in.IconName,
-		IconSource: in.IconSource,
+		Title:    in.Title,
+		Path:     in.Path,
+		IconName: in.IconName,
 	}
 
 	for _, child := range in.Children {
 		converted := convertFromNavigation(child)
-		out.Children = append(out.Children, &converted)
+		out.Children = append(out.Children, converted)
 	}
 
-	return out
+	return &out
 }
 
 func convertToSummarySections(in []*dashboard.PrintResponse_SummaryItem) ([]component.SummarySection, error) {
 	var list []component.SummarySection
 
 	for _, item := range in {
-		converted, err := convertToSummarySection(*item)
+		converted, err := convertToSummarySection(item)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +145,7 @@ func convertFromSummarySections(in []component.SummarySection) ([]*dashboard.Pri
 	return list, nil
 }
 
-func convertToSummarySection(in dashboard.PrintResponse_SummaryItem) (component.SummarySection, error) {
+func convertToSummarySection(in *dashboard.PrintResponse_SummaryItem) (component.SummarySection, error) {
 	var typedObject component.TypedObject
 	err := json.Unmarshal(in.Component, &typedObject)
 	if err != nil {

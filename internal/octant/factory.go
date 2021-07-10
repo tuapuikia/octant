@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,11 +11,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/vmware-tanzu/octant/internal/util/path_util"
+
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
 // EntriesFunc is a function that can create navigation entries.
@@ -25,6 +27,7 @@ type EntriesFunc func(ctx context.Context, prefix, namespace string, objectStore
 type NavigationEntries struct {
 	Lookup       map[string]string
 	EntriesFuncs map[string]EntriesFunc
+	IconMap      map[string]string
 	Order        []string
 }
 
@@ -40,7 +43,7 @@ type NavigationFactory struct {
 func NewNavigationFactory(namespace string, root string, objectStore store.Store, entries NavigationEntries) *NavigationFactory {
 	var rootPath = root
 	if namespace != "" {
-		rootPath = path.Join(root, "namespace", namespace, "")
+		rootPath = path_util.NamespacedPath(root, namespace, "")
 	}
 	if !strings.HasSuffix(rootPath, "/") {
 		rootPath = rootPath + "/"
@@ -60,33 +63,30 @@ func (nf *NavigationFactory) Root() string {
 }
 
 // Generate returns navigation entries.
-func (nf *NavigationFactory) Generate(ctx context.Context, title string, iconName, iconSource string, wantsClusterScoped bool) (*navigation.Navigation, error) {
-	n := &navigation.Navigation{
-		Title:    title,
-		Path:     nf.rootPath,
-		Children: []navigation.Navigation{},
-	}
-
-	if iconName != "" {
-		n.IconName = iconName
-
-		if iconSource != "" {
-			n.IconSource = iconSource
-		}
-	}
+func (nf *NavigationFactory) Generate(ctx context.Context, module string, wantsClusterScoped bool) ([]navigation.Navigation, error) {
+	n := []navigation.Navigation{}
 
 	var mu sync.Mutex
 	var g errgroup.Group
 
-	for _, name := range nf.entries.Order {
+	for index, name := range nf.entries.Order {
 		g.Go(func() error {
-			children, err := nf.genNode(ctx, name, nf.entries.EntriesFuncs[name], wantsClusterScoped)
+			child, err := nf.genNode(ctx, name, nf.entries.EntriesFuncs[name], wantsClusterScoped)
 			if err != nil {
 				return errors.Wrapf(err, "generate entries for %s", name)
 			}
 
+			if iconName, ok := nf.entries.IconMap[name]; ok {
+				child.IconName = iconName
+			}
+
+			// Setting module creates a divider in navigation
+			if (module != "") && (index == 0) {
+				child.Module = module
+			}
+
 			mu.Lock()
-			n.Children = append(n.Children, *children)
+			n = append(n, *child)
 			mu.Unlock()
 
 			return nil

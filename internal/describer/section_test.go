@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	configFake "github.com/vmware/octant/internal/config/fake"
-	"github.com/vmware/octant/pkg/view/component"
+	configFake "github.com/vmware-tanzu/octant/internal/config/fake"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func TestSectionDescriber(t *testing.T) {
@@ -46,7 +46,7 @@ func TestSectionDescriber(t *testing.T) {
 			expected: component.ContentResponse{
 				Title: component.Title(component.NewText("section")),
 				Components: []component.Component{
-					component.NewList("section", nil),
+					component.NewList(append([]component.TitleComponent{}, component.NewText("section")), nil),
 				},
 			},
 		},
@@ -61,7 +61,7 @@ func TestSectionDescriber(t *testing.T) {
 			expected: component.ContentResponse{
 				Title: component.Title(component.NewText("section")),
 				Components: []component.Component{
-					component.NewList("section", nil),
+					component.NewList(append([]component.TitleComponent{}, component.NewText("section")), nil),
 				},
 			},
 		},
@@ -75,7 +75,7 @@ func TestSectionDescriber(t *testing.T) {
 			expected: component.ContentResponse{
 				Title: component.Title(component.NewText("section")),
 				Components: []component.Component{
-					component.NewList("section", nil),
+					component.NewList(append([]component.TitleComponent{}, component.NewText("section")), nil),
 				},
 			},
 		},
@@ -84,7 +84,7 @@ func TestSectionDescriber(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 
-			got, err := tc.d.Describe(ctx, "/prefix", namespace, options)
+			got, err := tc.d.Describe(ctx, namespace, options)
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.expected, got)

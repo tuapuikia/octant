@@ -1,28 +1,36 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package testutil
 
 import (
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	"fmt"
+
 	extv1beta1 "k8s.io/api/extensions/v1beta1"
+
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	apiextv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	storagev1 "k8s.io/api/storage/v1"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 
-	batchv1 "k8s.io/api/batch/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
-
-	"github.com/vmware/octant/internal/conversion"
-	"github.com/vmware/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/conversion"
+	"github.com/vmware-tanzu/octant/internal/gvk"
 )
 
 // DefaultNamespace is the namespace that objects will belong to.
@@ -50,16 +58,42 @@ func CreateConfigMap(name string) *corev1.ConfigMap {
 	}
 }
 
-// CreateCRD creates a CRD
-func CreateCRD(name string) *apiextv1beta1.CustomResourceDefinition {
-	return &apiextv1beta1.CustomResourceDefinition{
-		TypeMeta:   genTypeMeta(gvk.CustomResourceDefinition),
-		ObjectMeta: genObjectMeta(name, true),
+// CRDOption is an option for configuring CreateCRD.
+type CRDOption func(definition *apiextv1.CustomResourceDefinition)
+
+// WithGenericCRD creates a crd with group/kind and one version
+func WithGenericCRD() CRDOption {
+	return func(crd *apiextv1.CustomResourceDefinition) {
+		crd.Spec.Group = "group"
+		crd.Spec.Versions = []apiextv1.CustomResourceDefinitionVersion{
+			{
+				Name:   "v1",
+				Served: true,
+			},
+		}
+		crd.Spec.Names.Kind = "kind"
 	}
 }
 
+// CreateCRD creates a CRD
+func CreateCRD(name string, options ...CRDOption) *apiextv1.CustomResourceDefinition {
+	crd := &apiextv1.CustomResourceDefinition{
+		TypeMeta:   genTypeMeta(gvk.CustomResourceDefinition),
+		ObjectMeta: genObjectMeta(name, false),
+	}
+
+	for _, option := range options {
+		option(crd)
+	}
+
+	return crd
+}
+
+// CustomResourceOption is an option for configuring CreateCustomResource.
+type CustomResourceOption func(u *unstructured.Unstructured)
+
 // CreateCustomResource creates a custom resource.
-func CreateCustomResource(name string) *unstructured.Unstructured {
+func CreateCustomResource(name string, options ...CustomResourceOption) *unstructured.Unstructured {
 	m := map[string]interface{}{
 		"apiVersion": "stable.example.com/v1",
 		"kind":       "CronTab",
@@ -74,6 +108,10 @@ func CreateCustomResource(name string) *unstructured.Unstructured {
 
 	u := &unstructured.Unstructured{Object: m}
 	u.SetNamespace(DefaultNamespace)
+
+	for _, option := range options {
+		option(u)
+	}
 
 	return u
 }
@@ -110,12 +148,32 @@ func CreateDaemonSet(name string) *appsv1.DaemonSet {
 	}
 }
 
+// DeploymentOption is an option for configuration CreateDeployment.
+type DeploymentOption func(d *appsv1.Deployment)
+
+func WithGenericDeployment() DeploymentOption {
+	return func(d *appsv1.Deployment) {
+		d.Spec.Template.Spec.Containers = []corev1.Container{
+			{
+				Name:  "container-name",
+				Image: "image",
+			},
+		}
+	}
+}
+
 // CreateDeployment creates a deployment
-func CreateDeployment(name string) *appsv1.Deployment {
-	return &appsv1.Deployment{
+func CreateDeployment(name string, options ...DeploymentOption) *appsv1.Deployment {
+	d := &appsv1.Deployment{
 		TypeMeta:   genTypeMeta(gvk.Deployment),
 		ObjectMeta: genObjectMeta(name, true),
 	}
+
+	for _, option := range options {
+		option(d)
+	}
+
+	return d
 }
 
 // CreateEvent creates a event
@@ -126,20 +184,33 @@ func CreateEvent(name string) *corev1.Event {
 	}
 }
 
+// CreateHorizontalPodAutoscaler creates a horizontal pod autoscaler
+func CreateHorizontalPodAutoscaler(name string) *autoscalingv1.HorizontalPodAutoscaler {
+	return &autoscalingv1.HorizontalPodAutoscaler{
+		TypeMeta:   genTypeMeta(gvk.HorizontalPodAutoscaler),
+		ObjectMeta: genObjectMeta(name, true),
+	}
+}
+
 // CreateIngress creates an ingress
-func CreateIngress(name string) *extv1beta1.Ingress {
-	return &extv1beta1.Ingress{
+func CreateIngress(name string) *networkingv1.Ingress {
+	return &networkingv1.Ingress{
 		TypeMeta:   genTypeMeta(gvk.Ingress),
 		ObjectMeta: genObjectMeta(name, true),
-		Spec: extv1beta1.IngressSpec{
-			Backend: &extv1beta1.IngressBackend{
-				ServiceName: "app",
-				ServicePort: intstr.FromInt(80),
+		Spec: networkingv1.IngressSpec{
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "app",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 80,
+					},
+				},
 			},
 		},
 	}
 }
 
+// CreateJob creates a job
 func CreateJob(name string) *batchv1.Job {
 	return &batchv1.Job{
 		TypeMeta:   genTypeMeta(gvk.Job),
@@ -147,6 +218,23 @@ func CreateJob(name string) *batchv1.Job {
 	}
 }
 
+// CreateNamespace creates a namespace
+func CreateNamespace(name string) *corev1.Namespace {
+	return &corev1.Namespace{
+		TypeMeta:   genTypeMeta(gvk.Namespace),
+		ObjectMeta: genObjectMeta(name, false),
+	}
+}
+
+// CreateNetworkPolicy creates a network policy
+func CreateNetworkPolicy(name string) *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		TypeMeta:   genTypeMeta(gvk.Namespace),
+		ObjectMeta: genObjectMeta(name, true),
+	}
+}
+
+// CreateNode creates a node
 func CreateNode(name string) *corev1.Node {
 	return &corev1.Node{
 		TypeMeta:   genTypeMeta(gvk.Node),
@@ -154,12 +242,36 @@ func CreateNode(name string) *corev1.Node {
 	}
 }
 
+// PodOption is an option for configuring CreatePod.
+type PodOption func(*corev1.Pod)
+
 // CreatePod creates a pod
-func CreatePod(name string) *corev1.Pod {
-	return &corev1.Pod{
+func CreatePod(name string, options ...PodOption) *corev1.Pod {
+	pod := &corev1.Pod{
 		TypeMeta:   genTypeMeta(gvk.Pod),
 		ObjectMeta: genObjectMeta(name, true),
 	}
+
+	for _, option := range options {
+		option(pod)
+	}
+
+	return pod
+}
+
+type PodMetricOption func(metrics *metricsv1beta1.PodMetrics)
+
+func CreatePodMetrics(name string, options ...PodMetricOption) *metricsv1beta1.PodMetrics {
+	m := &metricsv1beta1.PodMetrics{
+		TypeMeta:   genTypeMeta(gvk.PodMetrics),
+		ObjectMeta: genObjectMeta(name, true),
+	}
+
+	for _, option := range options {
+		option(m)
+	}
+
+	return m
 }
 
 // CreateReplicationController creates a replication controller
@@ -187,11 +299,17 @@ func CreateExtReplicaSet(name string) *extv1beta1.ReplicaSet {
 }
 
 // CreateSecret creates a secret
-func CreateSecret(name string) *corev1.Secret {
-	return &corev1.Secret{
+func CreateSecret(name string, options ...func(*corev1.Secret)) *corev1.Secret {
+	s := &corev1.Secret{
 		TypeMeta:   genTypeMeta(gvk.Secret),
 		ObjectMeta: genObjectMeta(name, true),
 	}
+
+	for _, option := range options {
+		option(s)
+	}
+
+	return s
 }
 
 // CreateService creates a service
@@ -203,11 +321,17 @@ func CreateService(name string) *corev1.Service {
 }
 
 // CreateServiceAccount creates a service account
-func CreateServiceAccount(name string) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{
+func CreateServiceAccount(name string, options ...func(*corev1.ServiceAccount)) *corev1.ServiceAccount {
+	sa := &corev1.ServiceAccount{
 		TypeMeta:   genTypeMeta(gvk.ServiceAccount),
 		ObjectMeta: genObjectMeta(name, true),
 	}
+
+	for _, option := range options {
+		option(sa)
+	}
+
+	return sa
 }
 
 // CreateStatefulSet creates a stateful set
@@ -244,6 +368,18 @@ func CreatePersistentVolumeClaim(name string) *corev1.PersistentVolumeClaim {
 			Capacity: corev1.ResourceList{
 				corev1.ResourceName(corev1.ResourceStorage): resource.MustParse("10Gi"),
 			},
+		},
+	}
+}
+
+// CreatePersistentVolume creates a persistent volume
+func CreatePersistentVolume(name string) *corev1.PersistentVolume {
+	return &corev1.PersistentVolume{
+		TypeMeta:   genTypeMeta(gvk.PersistentVolume),
+		ObjectMeta: genObjectMeta(name, true),
+		Spec:       corev1.PersistentVolumeSpec{},
+		Status: corev1.PersistentVolumeStatus{
+			Phase: corev1.VolumeBound,
 		},
 	}
 }
@@ -316,6 +452,54 @@ func CreateRoleBinding(roleBindingName, roleName string, subjects []rbacv1.Subje
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 		Subjects: subjects,
+	}
+}
+
+func CreateAPIService(version, group string) *apiregistrationv1.APIService {
+	return &apiregistrationv1.APIService{
+		TypeMeta:   genTypeMeta(gvk.APIService),
+		ObjectMeta: genObjectMeta(fmt.Sprintf("%s.%s", version, group), false),
+		Spec: apiregistrationv1.APIServiceSpec{
+			Version:              version,
+			VersionPriority:      100,
+			Group:                group,
+			GroupPriorityMinimum: 100,
+		},
+		Status: apiregistrationv1.APIServiceStatus{
+			Conditions: []apiregistrationv1.APIServiceCondition{
+				{
+					Type:    apiregistrationv1.Available,
+					Status:  apiregistrationv1.ConditionTrue,
+					Reason:  "Local",
+					Message: "Local APIServices are always available",
+				},
+			},
+		},
+	}
+}
+
+func CreateMutatingWebhookConfiguration(name string) *admissionregistrationv1.MutatingWebhookConfiguration {
+	return &admissionregistrationv1.MutatingWebhookConfiguration{
+		TypeMeta:   genTypeMeta(gvk.MutatingWebhookConfiguration),
+		ObjectMeta: genObjectMeta(name, false),
+		Webhooks:   []admissionregistrationv1.MutatingWebhook{},
+	}
+}
+
+func CreateValidatingWebhookConfiguration(name string) *admissionregistrationv1.ValidatingWebhookConfiguration {
+	return &admissionregistrationv1.ValidatingWebhookConfiguration{
+		TypeMeta:   genTypeMeta(gvk.ValidatingWebhookConfiguration),
+		ObjectMeta: genObjectMeta(name, false),
+		Webhooks:   []admissionregistrationv1.ValidatingWebhook{},
+	}
+}
+
+// CreateStorageClass creates a storage class
+func CreateStorageClass(name string) *storagev1.StorageClass {
+	return &storagev1.StorageClass{
+		TypeMeta:    genTypeMeta(gvk.StorageClass),
+		ObjectMeta:  genObjectMeta(name, true),
+		Provisioner: "manual",
 	}
 }
 

@@ -1,11 +1,15 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import (
+	"github.com/vmware-tanzu/octant/internal/util/json"
+
+	"github.com/vmware-tanzu/octant/pkg/action"
+)
 
 type PortForwardState struct {
 	IsForwardable bool   `json:"isForwardable,omitempty"`
@@ -15,34 +19,47 @@ type PortForwardState struct {
 }
 
 // Port is a component for a port
+//
+// +octant:component
 type Port struct {
-	base
+	Base
 	Config PortConfig `json:"config"`
 }
 
 // PortConfig is the contents of Port
 type PortConfig struct {
-	Namespace  string           `json:"namespace,omitempty"`
-	APIVersion string           `json:"apiVersion,omitempty"`
-	Kind       string           `json:"kind,omitempty"`
-	Name       string           `json:"name,omitempty"`
-	Port       int              `json:"port,omitempty"`
-	Protocol   string           `json:"protocol,omitempty"`
-	State      PortForwardState `json:"state,omitempty"`
+	Port           int              `json:"port,omitempty"`
+	Protocol       string           `json:"protocol,omitempty"`
+	TargetPort     int              `json:"targetPort,omitempty"`
+	TargetPortName string           `json:"targetPortName,omitempty"`
+	State          PortForwardState `json:"state,omitempty"`
+	Button         *ButtonGroup     `json:"buttonGroup,omitempty"`
 }
 
 // NewPort creates a port component
 func NewPort(namespace, apiVersion, kind, name string, port int, protocol string, pfs PortForwardState) *Port {
 	return &Port{
-		base: newBase(typePort, nil),
+		Base: newBase(TypePort, nil),
 		Config: PortConfig{
-			Namespace:  namespace,
-			APIVersion: apiVersion,
-			Kind:       kind,
-			Name:       name,
-			Port:       port,
-			Protocol:   protocol,
-			State:      pfs,
+			Port:     port,
+			Protocol: protocol,
+			State:    pfs,
+			Button:   describeButton(namespace, apiVersion, kind, name, port, pfs),
+		},
+	}
+}
+
+// NewPort creates a port component
+func NewServicePort(namespace, apiVersion, kind, name string, port int, protocol string, targetPort int, targetPortName string, pfs PortForwardState) *Port {
+	return &Port{
+		Base: newBase(TypePort, nil),
+		Config: PortConfig{
+			Port:           port,
+			Protocol:       protocol,
+			TargetPort:     targetPort,
+			TargetPortName: targetPortName,
+			State:          pfs,
+			Button:         describeButton(namespace, apiVersion, kind, name, targetPort, pfs),
 		},
 	}
 }
@@ -57,7 +74,7 @@ type portMarshal Port
 // MarshalJSON implements json.Marshaler
 func (t *Port) MarshalJSON() ([]byte, error) {
 	m := portMarshal(*t)
-	m.Metadata.Type = typePort
+	m.Metadata.Type = TypePort
 	return json.Marshal(&m)
 }
 
@@ -65,14 +82,17 @@ type PortsConfig struct {
 	Ports []Port `json:"ports,omitempty"`
 }
 
+// Ports is a group of ports.
+//
+// +octant:component
 type Ports struct {
-	base
+	Base
 	Config PortsConfig `json:"config,omitempty"`
 }
 
 func NewPorts(ports []Port) *Ports {
 	return &Ports{
-		base: newBase(typePorts, nil),
+		Base: newBase(TypePorts, nil),
 		Config: PortsConfig{
 			Ports: ports,
 		},
@@ -87,6 +107,36 @@ type portsMarshal Ports
 
 func (t *Ports) MarshalJSON() ([]byte, error) {
 	m := portsMarshal(*t)
-	m.Metadata.Type = typePorts
+	m.Metadata.Type = TypePorts
 	return json.Marshal(&m)
+}
+
+func describeButton(namespace, apiVersion, kind, name string, port int, pfs PortForwardState) *ButtonGroup {
+	buttonGroup := NewButtonGroup()
+	var buttonText, actionName string
+	var payload action.Payload
+
+	if pfs.IsForwarded {
+		buttonText = "Stop port forward"
+		actionName = "overview/stopPortForward"
+		payload = action.Payload{
+			"id": pfs.ID,
+		}
+	} else {
+		buttonText = "Start port forward"
+		actionName = "overview/startPortForward"
+		payload = action.Payload{
+			"apiVersion": apiVersion,
+			"kind":       kind,
+			"name":       name,
+			"namespace":  namespace,
+			"port":       port,
+		}
+	}
+
+	buttonGroup.AddButton(
+		NewButton(buttonText, action.CreatePayload(actionName, payload)),
+	)
+
+	return buttonGroup
 }

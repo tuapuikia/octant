@@ -1,13 +1,14 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"testing"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,12 +18,19 @@ func TestText_Markdown(t *testing.T) {
 	text := NewMarkdownText("**bold**")
 	require.True(t, text.IsMarkdown())
 	require.True(t, text.Config.IsMarkdown)
+	require.False(t, text.Config.TrustedContent)
 
 	text.DisableMarkdown()
 	require.False(t, text.IsMarkdown())
 
 	text.EnableMarkdown()
 	require.True(t, text.IsMarkdown())
+
+	text.EnableTrustedContent()
+	require.True(t, text.TrustedContent())
+
+	text.DisableTrustedContent()
+	require.False(t, text.TrustedContent())
 }
 
 func Test_Text_Marshal(t *testing.T) {
@@ -53,7 +61,7 @@ func Test_Text_Marshal(t *testing.T) {
 		{
 			name: "with title",
 			input: &Text{
-				base: newBase(typeText, TitleFromString("image")),
+				Base: newBase(TypeText, TitleFromString("image")),
 				Config: TextConfig{
 					Text: "nginx:latest",
 				},
@@ -75,6 +83,25 @@ func Test_Text_Marshal(t *testing.T) {
             }
 `,
 		},
+		{
+			name: "with clipboard",
+			input: &Text{
+				Config: TextConfig{
+					Text:           "secret",
+					ClipboardValue: "my-secret",
+				},
+			},
+			expected: `
+            {
+                "metadata": {
+                  "type": "text"
+                },
+                "config": {
+                  "value": "secret",
+				  "clipboardValue": "my-secret"
+                }
+            }
+`},
 	}
 
 	for _, tc := range tests {

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -13,15 +13,18 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/plugin/service"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
-	"github.com/vmware/octant/pkg/view/flexlayout"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/plugin/service"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/view/flexlayout"
 )
 
 var pluginName = "plugin-name"
+
+const pluginActionName = "action.octant.dev/example"
 
 // This is a sample plugin showing the features of Octant's plugin API.
 func main() {
@@ -34,15 +37,19 @@ func main() {
 	// Tell Octant to call this plugin when printing configuration or tabs for Pods
 	capabilities := &plugin.Capabilities{
 		SupportsPrinterConfig: []schema.GroupVersionKind{podGVK},
+		SupportsObjectStatus:  []schema.GroupVersionKind{podGVK},
 		SupportsTab:           []schema.GroupVersionKind{podGVK},
+		ActionNames:           []string{pluginActionName},
 		IsModule:              true,
 	}
 
 	// Set up what should happen when Octant calls this plugin.
 	options := []service.PluginOption{
 		service.WithPrinter(handlePrint),
+		service.WithObjectStatus(handleStatus),
 		service.WithTabPrinter(handleTab),
 		service.WithNavigation(handleNavigation, initRoutes),
+		service.WithActionHandler(handleAction),
 	}
 
 	// Use the plugin service helper to register this plugin.
@@ -70,8 +77,7 @@ func handleTab(request *service.PrintRequest) (plugin.TabResponse, error) {
 	// start a new row.
 	layout := flexlayout.New()
 	section := layout.AddSection()
-
-	// Octant contain's a library of components that can be used to display content.
+	// Octant contains a library of components that can be used to display content.
 	// This example uses markdown text.
 	contents := component.NewMarkdownText("content from a *plugin*")
 
@@ -87,12 +93,44 @@ func handleTab(request *service.PrintRequest) (plugin.TabResponse, error) {
 	return plugin.TabResponse{Tab: tab}, nil
 }
 
+func handleStatus(request *service.PrintRequest) (plugin.ObjectStatusResponse, error) {
+	if request.Object == nil {
+		return plugin.ObjectStatusResponse{}, errors.Errorf("object is nil")
+	}
+	// load an object from the cluster and use that object to create a response.
+
+	// Octant has a helper function to generate a key from an object. The key
+	// is used to find the object in the cluster.
+	key, err := store.KeyFromObject(request.Object)
+	if err != nil {
+		return plugin.ObjectStatusResponse{}, err
+	}
+	u, err := request.DashboardClient.Get(request.Context(), key)
+	if err != nil {
+		return plugin.ObjectStatusResponse{}, err
+	}
+
+	// The plugin can check if the object it requested exists.
+	if u == nil {
+		return plugin.ObjectStatusResponse{}, errors.New("object doesn't exist")
+	}
+
+	// Will add object UID to the Resource Viewer properties table
+	return plugin.ObjectStatusResponse{
+		ObjectStatus: component.PodSummary{
+			Properties: []component.Property{{
+				Label: "ID (from plugin)",
+				Value: component.NewText(string(u.GetUID())),
+			}},
+		},
+	}, nil
+}
+
 // handlePrint is called when Octant wants to print an object.
 func handlePrint(request *service.PrintRequest) (plugin.PrintResponse, error) {
 	if request.Object == nil {
 		return plugin.PrintResponse{}, errors.Errorf("object is nil")
 	}
-
 	// load an object from the cluster and use that object to create a response.
 
 	// Octant has a helper function to generate a key from an object. The key
@@ -106,9 +144,14 @@ func handlePrint(request *service.PrintRequest) (plugin.PrintResponse, error) {
 		return plugin.PrintResponse{}, err
 	}
 
+	// The plugin can check if the object it requested exists.
+	if u == nil {
+		return plugin.PrintResponse{}, errors.New("object doesn't exist")
+	}
+
 	// Octant has a component library that can be used to build content for a plugin.
 	// In this case, the plugin is creating a card.
-	podCard := component.NewCard(fmt.Sprintf("Extra Output for %s", u.GetName()))
+	podCard := component.NewCard(component.TitleFromString(fmt.Sprintf("Extra Output for %s", u.GetName())))
 	podCard.SetBody(component.NewMarkdownText("This output was generated from _octant-sample-plugin_"))
 
 	msg := fmt.Sprintf("update from plugin at %s", time.Now().Format(time.RFC3339))
@@ -136,7 +179,7 @@ func handlePrint(request *service.PrintRequest) (plugin.PrintResponse, error) {
 	}, nil
 }
 
-// handlePrint creates a navigation tree for this plugin. Navigation is dynamic and will
+// handleNavigation creates a navigation tree for this plugin. Navigation is dynamic and will
 // be called frequently from Octant. Navigation is a tree of `Navigation` structs.
 // The plugin can use whatever paths it likes since these paths can be namespaced to the
 // the plugin.
@@ -162,13 +205,41 @@ func handleNavigation(request *service.NavigationRequest) (navigation.Navigation
 	}, nil
 }
 
+// handleAction creates an action handler for this plugin. Actions send
+// a payload which are used to execute some task
+func handleAction(request *service.ActionRequest) error {
+	actionValue, err := request.Payload.String("action")
+	if err != nil {
+		return err
+	}
+
+	if actionValue == pluginActionName {
+		// Sending an alert needs a clientID from the request context
+		alert := action.CreateAlert(action.AlertTypeInfo, fmt.Sprintf("My client ID is: %s", request.ClientState.ClientID()), action.DefaultAlertExpiration)
+		request.DashboardClient.SendAlert(request.Context(), request.ClientState.ClientID(), alert)
+	}
+
+	return nil
+}
+
 // initRoutes routes for this plugin. In this example, there is a global catch all route
 // that will return the content for every single path.
 func initRoutes(router *service.Router) {
 	gen := func(name, accessor, requestPath string) component.Component {
 		cardBody := component.NewText(fmt.Sprintf("hello from plugin: path %s", requestPath))
-		card := component.NewCard(fmt.Sprintf("My Card - %s", name))
+		card := component.NewCard(component.TitleFromString(fmt.Sprintf("My Card - %s", name)))
 		card.SetBody(cardBody)
+
+		form := component.Form{Fields: []component.FormField{
+			component.NewFormFieldHidden("action", pluginActionName),
+		}}
+
+		testButton := component.Action{
+			Name:  "Test Button",
+			Title: "Test Button",
+			Form:  form,
+		}
+		card.AddAction(testButton)
 		cardList := component.NewCardList(name)
 		cardList.AddCard(*card)
 		cardList.SetAccessor(accessor)
@@ -176,12 +247,24 @@ func initRoutes(router *service.Router) {
 		return cardList
 	}
 
-	router.HandleFunc("/*", func(request *service.Request) (component.ContentResponse, error) {
+	router.HandleFunc("*", func(request service.Request) (component.ContentResponse, error) {
 		// For each page, generate two tabs with a some content.
-		component1 := gen("Tab 1", "tab1", request.Path)
-		component2 := gen("Tab 2", "tab2", request.Path)
+		component1 := gen("Tab 1", "tab1", request.Path())
+		component2 := gen("Tab 2", "tab2", request.Path())
 
-		contentResponse := component.NewContentResponse(component.TitleFromString("Example"))
+		// Illustrate using dropdowns and links for breadcrumbs
+		items := make([]component.DropdownItemConfig, 0)
+		dropdown := component.NewDropdown("test", component.DropdownLink, "action", items...)
+		dropdown.AddDropdownItem("first", component.Url, "Nested Once", "nested-once", "")
+		dropdown.AddDropdownItem("second", component.Url, "Nested Twice", "nested-once/nested-twice", "")
+		dropdown.SetTitle(append([]component.TitleComponent{}, component.NewLink("", "Dropdown", "/url")))
+
+		var title []component.TitleComponent
+		title = component.Title(dropdown)
+		title = append(title, component.NewLink("", "Example Link", "link"))
+		title = append(title, component.NewText("Example"))
+
+		contentResponse := component.NewContentResponse(title)
 		contentResponse.Add(component1, component2)
 
 		return *contentResponse, nil

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func Test_ToComponent(t *testing.T) {
@@ -38,7 +38,7 @@ func Test_ToComponent(t *testing.T) {
 					},
 				},
 			},
-			expected: component.NewLogs("default", "pod", []string{"one", "two"}),
+			expected: component.NewLogs("default", "pod", []string{"", "one", "two"}...),
 		},
 		{
 			name: "with init containers",
@@ -57,7 +57,7 @@ func Test_ToComponent(t *testing.T) {
 					},
 				},
 			},
-			expected: component.NewLogs("default", "pod", []string{"init", "one", "two"}),
+			expected: component.NewLogs("default", "pod", []string{"", "init", "one", "two"}...),
 		},
 		{
 			name:   "nil",

@@ -1,0 +1,41 @@
+/* Copyright (c) 2020 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+:host-context(body) {
+  --editor-border-color: #d8e3e9;
+}
+
+// Color variables for Dark Theme.
+:host-context(body.dark) {
+  --editor-border-color: #324f62;
+}
+
+.editor-container {
+  height: calc(90% - 72px);
+  display: flex;
+  flex-direction: column;
+
+  .editor {
+    flex: 1;
+    display: flex;
+    flex-flow: column;
+    margin: 1.25em 0;
+    border: 1px solid var(--editor-border-color);
+  }
+}
+
+ngx-monaco-editor {
+  height: 100%;
+}
+
+.controls {
+  display: flex;
+
+  cds-button {
+    margin-left: 16px;
+  }
+
+  .select-wrapper {
+    flex: 1;
+  }
+}

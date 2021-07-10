@@ -1,0 +1,7 @@
+<ng-container *ngIf="loading">
+  <div class="progress loop"><progress></progress></div>
+</ng-container>
+
+<ng-container *ngIf="!loading && hasAlert()">
+  <app-alert [alert]="alertConfig"></app-alert>
+</ng-container>

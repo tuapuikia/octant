@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,22 +7,22 @@ package configuration
 
 import (
 	"context"
-	"net/http"
 	"path"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/api"
-	"github.com/vmware/octant/internal/config"
-	"github.com/vmware/octant/internal/describer"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/internal/octant"
-	"github.com/vmware/octant/pkg/icon"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/api"
+	"github.com/vmware-tanzu/octant/internal/config"
+	"github.com/vmware-tanzu/octant/internal/describer"
+	"github.com/vmware-tanzu/octant/internal/event"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/icon"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 type Options struct {
@@ -34,10 +34,11 @@ type Configuration struct {
 	Options
 
 	pathMatcher          *describer.PathMatcher
-	kubeContextGenerator *kubeContextGenerator
+	kubeContextGenerator *event.ContextsGenerator
 }
 
 var _ module.Module = (*Configuration)(nil)
+var _ module.ActionReceiver = (*Configuration)(nil)
 
 func New(ctx context.Context, options Options) *Configuration {
 	pm := describer.NewPathMatcher("configuration")
@@ -48,7 +49,7 @@ func New(ctx context.Context, options Options) *Configuration {
 	return &Configuration{
 		Options:              options,
 		pathMatcher:          pm,
-		kubeContextGenerator: newKubeContextGenerator(options.DashConfig),
+		kubeContextGenerator: event.NewContextsGenerator(options.DashConfig),
 	}
 }
 
@@ -56,32 +57,26 @@ func (Configuration) Name() string {
 	return "configuration"
 }
 
-func (c *Configuration) Handlers(ctx context.Context) map[string]http.Handler {
-	logger := log.From(ctx)
+func (Configuration) Description() string {
+	return `Plugins module displays all registered plugins and their properties.
+		To find list of known plugins go to https://github.com/topics/octant-plugin`
+}
 
-	update := &updateCurrentContextHandler{
-		logger: logger,
-		contextUpdateFunc: func(name string) error {
-			return c.DashConfig.UseContext(ctx, name)
-		},
-	}
-
-	return map[string]http.Handler{
-		"/kube-contexts": update,
-	}
+func (c Configuration) ClientRequestHandlers() []octant.ClientRequestHandler {
+	return nil
 }
 
 func (c *Configuration) SetContext(ctx context.Context, contextName string) error {
 	return nil
 }
 
-func (c *Configuration) Content(ctx context.Context, contentPath, prefix, namespace string, opts module.ContentOptions) (component.ContentResponse, error) {
+func (c *Configuration) Content(ctx context.Context, contentPath string, opts module.ContentOptions) (component.ContentResponse, error) {
 	pf, err := c.pathMatcher.Find(contentPath)
 	if err != nil {
 		if err == describer.ErrPathNotFound {
-			return describer.EmptyContentResponse, api.NewNotFoundError(contentPath)
+			return component.EmptyContentResponse, api.NewNotFoundError(contentPath)
 		}
-		return describer.EmptyContentResponse, err
+		return component.EmptyContentResponse, err
 	}
 
 	options := describer.Options{
@@ -90,9 +85,9 @@ func (c *Configuration) Content(ctx context.Context, contentPath, prefix, namesp
 		Dash:     c.DashConfig,
 	}
 
-	cResponse, err := pf.Describer.Describe(ctx, prefix, namespace, options)
+	cResponse, err := pf.Describer.Describe(ctx, "", options)
 	if err != nil {
-		return describer.EmptyContentResponse, err
+		return component.EmptyContentResponse, err
 	}
 
 	return cResponse, nil
@@ -105,16 +100,10 @@ func (c *Configuration) ContentPath() string {
 func (c *Configuration) Navigation(ctx context.Context, namespace, root string) ([]navigation.Navigation, error) {
 	return []navigation.Navigation{
 		{
-			Title:    "Configuration",
-			Path:     path.Join("/content", c.ContentPath(), "/"),
-			IconName: icon.Configuration,
-			Children: []navigation.Navigation{
-				{
-					Title:    "Plugins",
-					Path:     path.Join("/content", c.ContentPath(), "plugins"),
-					IconName: icon.ConfigurationPlugin,
-				},
-			},
+			Module:   "Configuration",
+			Title:    "Plugins",
+			Path:     path.Join(c.ContentPath(), "plugins"),
+			IconName: icon.ConfigurationPlugin,
 		},
 	}, nil
 }
@@ -146,9 +135,25 @@ func (c Configuration) RemoveCRD(ctx context.Context, crd *unstructured.Unstruct
 	return nil
 }
 
+func (c Configuration) ResetCRDs(ctx context.Context) error {
+	return nil
+}
+
 // Generators allow modules to send events to the frontend.
 func (c Configuration) Generators() []octant.Generator {
 	return []octant.Generator{
 		c.kubeContextGenerator,
 	}
+}
+
+func (c *Configuration) ActionPaths() map[string]action.DispatcherFunc {
+	objectDeleter := NewObjectDeleter(c.DashConfig.Logger(), c.DashConfig.ObjectStore())
+
+	return map[string]action.DispatcherFunc{
+		objectDeleter.ActionName(): objectDeleter.Handle,
+	}
+}
+
+func (c *Configuration) GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error) {
+	return schema.GroupVersionKind{}, errors.Errorf("not supported")
 }

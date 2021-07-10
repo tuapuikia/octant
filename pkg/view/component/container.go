@@ -1,15 +1,17 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import "github.com/vmware-tanzu/octant/internal/util/json"
 
 // Containers is a component wrapping multiple docker container definitions
+//
+// +octant:component
 type Containers struct {
-	base
+	Base
 	Config ContainersConfig `json:"config"`
 }
 
@@ -27,7 +29,7 @@ type ContainerDef struct {
 // NewContainers creates a containers component
 func NewContainers() *Containers {
 	return &Containers{
-		base:   newBase("containers", nil),
+		Base:   newBase("containers", nil),
 		Config: ContainersConfig{},
 	}
 }
@@ -47,6 +49,6 @@ type containersMarshal Containers
 // MarshalJSON implements json.Marshaler
 func (t *Containers) MarshalJSON() ([]byte, error) {
 	m := containersMarshal(*t)
-	m.Metadata.Type = "containers"
+	m.Metadata.Type = TypeContainers
 	return json.Marshal(&m)
 }

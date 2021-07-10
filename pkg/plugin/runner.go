@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,13 +7,13 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // Runners is an interface that manager can call to get runners for a
@@ -24,7 +24,7 @@ type Runners interface {
 	Print(ManagerStore) (DefaultRunner, chan PrintResponse)
 	// Tab returns a runner for tabs. The caller should close
 	// the channel when they are done with it.
-	Tab(ManagerStore) (DefaultRunner, chan component.Tab)
+	Tab(ManagerStore) (DefaultRunner, chan []component.Tab)
 	// ObjectStatus returns a runner for object status. The caller should
 	// close the channel when they are done with it.
 	ObjectStatus(ManagerStore) (DefaultRunner, chan ObjectStatusResponse)
@@ -43,8 +43,8 @@ func (dr *defaultRunners) Print(store ManagerStore) (DefaultRunner, chan PrintRe
 	return PrintRunner(store, ch), ch
 }
 
-func (dr *defaultRunners) Tab(store ManagerStore) (DefaultRunner, chan component.Tab) {
-	ch := make(chan component.Tab)
+func (dr *defaultRunners) Tab(store ManagerStore) (DefaultRunner, chan []component.Tab) {
+	ch := make(chan []component.Tab)
 	return TabRunner(store, ch), ch
 }
 
@@ -61,7 +61,7 @@ type DefaultRunner struct {
 // Run runs the runner for an object with the provided clients.
 func (pr *DefaultRunner) Run(ctx context.Context, object runtime.Object, clientNames []string) error {
 	if err := pr.validate(object); err != nil {
-		return errors.Wrap(err, "plugin runner validate")
+		return fmt.Errorf("plugin runner validate: %w", err)
 	}
 
 	var g errgroup.Group
@@ -72,18 +72,17 @@ func (pr *DefaultRunner) Run(ctx context.Context, object runtime.Object, clientN
 		fn := func(name string) func() error {
 			return func() error {
 				if err := pr.RunFunc(ctx, name, gvk, object); err != nil {
-					return errors.Wrap(err, "running")
+					return fmt.Errorf("running on %s: %w", name, err)
 				}
 
 				return nil
 			}
 		}
-
 		g.Go(fn(name))
 	}
 
 	if err := g.Wait(); err != nil {
-		return errors.Wrap(err, "handle object")
+		return fmt.Errorf("handle object: %w", err)
 	}
 
 	return nil
@@ -91,11 +90,11 @@ func (pr *DefaultRunner) Run(ctx context.Context, object runtime.Object, clientN
 
 func (pr *DefaultRunner) validate(object runtime.Object) error {
 	if object == nil {
-		return errors.New("object is nil")
+		return fmt.Errorf("object is nil")
 	}
 
 	if pr.RunFunc == nil {
-		return errors.New("requires a runFunc")
+		return fmt.Errorf("requires a runFunc")
 	}
 
 	return nil
@@ -105,6 +104,24 @@ func (pr *DefaultRunner) validate(object runtime.Object) error {
 func PrintRunner(store ManagerStore, ch chan<- PrintResponse) DefaultRunner {
 	return DefaultRunner{
 		RunFunc: func(ctx context.Context, name string, gvk schema.GroupVersionKind, object runtime.Object) error {
+			if IsJavaScriptPlugin(name) {
+				jsPlugin, ok := store.GetJS(name)
+				if !ok {
+					return fmt.Errorf("plugin %s not found", name)
+				}
+				if !jsPlugin.Metadata().Capabilities.HasPrinterSupport(gvk) {
+					return nil
+				}
+
+				resp, err := jsPlugin.Print(ctx, object)
+
+				if err != nil {
+					return err
+				}
+				ch <- resp
+				return nil
+			}
+
 			metadata, err := store.GetMetadata(name)
 			if err != nil {
 				return err
@@ -127,7 +144,7 @@ func PrintRunner(store ManagerStore, ch chan<- PrintResponse) DefaultRunner {
 
 func printObject(ctx context.Context, store ManagerStore, pluginName string, object runtime.Object) (PrintResponse, error) {
 	if store == nil {
-		return PrintResponse{}, errors.New("store is nil")
+		return PrintResponse{}, fmt.Errorf("store is nil")
 	}
 
 	service, err := store.GetService(pluginName)
@@ -137,18 +154,41 @@ func printObject(ctx context.Context, store ManagerStore, pluginName string, obj
 
 	resp, err := service.Print(ctx, object)
 	if err != nil {
-		return PrintResponse{}, errors.Wrapf(err, "print object with plugin %q", pluginName)
+		return PrintResponse{}, fmt.Errorf("print object with plugin %q: %w", pluginName, err)
 	}
 
 	return resp, nil
 }
 
 // TabRunner is a runner for tabs.
-func TabRunner(store ManagerStore, ch chan<- component.Tab) DefaultRunner {
+func TabRunner(store ManagerStore, ch chan<- []component.Tab) DefaultRunner {
 	runner := DefaultRunner{
 		RunFunc: func(ctx context.Context, name string, gvk schema.GroupVersionKind, object runtime.Object) error {
+			if IsJavaScriptPlugin(name) {
+				jsPlugin, ok := store.GetJS(name)
+				if !ok {
+					return fmt.Errorf("plugin %s not found", name)
+				}
+
+				if !jsPlugin.Metadata().Capabilities.HasTabSupport(gvk) {
+					return nil
+				}
+
+				responses, err := jsPlugin.PrintTabs(ctx, object)
+				if err != nil {
+					return fmt.Errorf("printing tabResponse for plugin: %q: %w", name, err)
+				}
+
+				var jsTabs []component.Tab
+				for _, resp := range responses {
+					jsTabs = append(jsTabs, *resp.Tab)
+				}
+				ch <- jsTabs
+				return nil
+			}
+
 			if store == nil {
-				return errors.New("store is nil")
+				return fmt.Errorf("store is nil")
 			}
 
 			metadata, err := store.GetMetadata(name)
@@ -165,12 +205,17 @@ func TabRunner(store ManagerStore, ch chan<- component.Tab) DefaultRunner {
 				return err
 			}
 
-			tabResponse, err := service.PrintTab(ctx, object)
+			tabResponses, err := service.PrintTabs(ctx, object)
 			if err != nil {
-				return errors.Wrapf(err, "printing tabResponse for plugin %q", name)
+				return fmt.Errorf("printing tabResponse for plugin %q: %w", name, err)
 			}
 
-			ch <- *tabResponse.Tab
+			var tabs []component.Tab
+			for _, tabResponse := range tabResponses {
+				tabs = append(tabs, *tabResponse.Tab)
+			}
+
+			ch <- tabs
 
 			return nil
 		},
@@ -183,12 +228,31 @@ func TabRunner(store ManagerStore, ch chan<- component.Tab) DefaultRunner {
 func ObjectStatusRunner(store ManagerStore, ch chan<- ObjectStatusResponse) DefaultRunner {
 	return DefaultRunner{
 		RunFunc: func(ctx context.Context, name string, gvk schema.GroupVersionKind, object runtime.Object) error {
+			if IsJavaScriptPlugin(name) {
+				jsPlugin, ok := store.GetJS(name)
+				if !ok {
+					return fmt.Errorf("plugin %s not found", name)
+				}
+
+				if !jsPlugin.Metadata().Capabilities.HasObjectStatusSupport(gvk) {
+					return nil
+				}
+
+				resp, err := jsPlugin.ObjectStatus(ctx, object)
+				if err != nil {
+					return fmt.Errorf("printing objectStatus for plugin: %q: %w", name, err)
+				}
+
+				ch <- resp
+				return nil
+			}
+
 			metadata, err := store.GetMetadata(name)
 			if err != nil {
 				return err
 			}
 
-			if !metadata.Capabilities.HasPrinterSupport(gvk) {
+			if !metadata.Capabilities.HasObjectStatusSupport(gvk) {
 				return nil
 			}
 
@@ -199,7 +263,7 @@ func ObjectStatusRunner(store ManagerStore, ch chan<- ObjectStatusResponse) Defa
 
 			resp, err := service.ObjectStatus(ctx, object)
 			if err != nil {
-				return errors.Wrapf(err, "print object status with plugin %q", name)
+				return fmt.Errorf("print object status with plugin %q: %w", name, err)
 			}
 
 			ch <- resp

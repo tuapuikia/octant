@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,101 +7,117 @@ package describer
 
 import (
 	"context"
+	"fmt"
 	"path"
 
-	"github.com/pkg/errors"
-	apiextv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
-// TODO: delete me
-func CustomResourceDefinitionNames(ctx context.Context, o store.Store) ([]string, error) {
-	key := store.Key{
-		APIVersion: "apiextensions.k8s.io/v1beta1",
-		Kind:       "CustomResourceDefinition",
-	}
+func CustomResourceDefinition(ctx context.Context, name string, o store.Store) (*unstructured.Unstructured, error) {
+	key := store.KeyFromGroupVersionKind(gvk.CustomResourceDefinition)
+	key.Name = name
 
-	if err := o.HasAccess(ctx, key, "list"); err != nil {
-		return []string{}, nil
-	}
-
-	rawList, _, err := o.List(ctx, key)
+	crd, err := o.Get(ctx, key)
 	if err != nil {
-		return nil, errors.Wrap(err, "listing CRDs")
-	}
-
-	var list []string
-
-	for _, object := range rawList.Items {
-		list = append(list, object.GetName())
-	}
-
-	return list, nil
-}
-
-func CustomResourceDefinition(ctx context.Context, name string, o store.Store) (*apiextv1beta1.CustomResourceDefinition, error) {
-	key := store.Key{
-		APIVersion: "apiextensions.k8s.io/v1beta1",
-		Kind:       "CustomResourceDefinition",
-		Name:       name,
-	}
-
-	crd := &apiextv1beta1.CustomResourceDefinition{}
-	if err := store.GetAs(ctx, o, key, crd); err != nil {
-		return nil, errors.Wrap(err, "get object as custom resource definition from store")
+		return nil, fmt.Errorf("get %s: %w", key, err)
 	}
 
 	return crd, nil
 }
 
-func AddCRD(ctx context.Context, crd *unstructured.Unstructured, pm *PathMatcher, crdSection *CRDSection, m module.Module) {
+func AddCRD(ctx context.Context, crd *unstructured.Unstructured, pm *PathMatcher, crdSection *CRDSection, m module.Module, s store.Store) {
 	name := crd.GetName()
 
-	logger := log.From(ctx)
-	logger.With("crd-name", name, "module", m.Name()).Debugf("adding CRD")
+	logger := log.From(ctx).With("crd-name", name, "module", m.Name())
+	logger.Debugf("adding CRD")
 
 	cld := newCRDList(name, crdListPath(name))
 
+	// TODO: this should add a list of custom resource definitions (GH#509)
 	crdSection.Add(name, cld)
 
 	for _, pf := range cld.PathFilters() {
 		pm.Register(ctx, pf)
 	}
 
-	cd := newCRD(name, crdObjectPath(name))
-	for _, pf := range cd.PathFilters() {
-		pm.Register(ctx, pf)
+	versions, err := crdVersions(crd)
+	if err != nil {
+		logger.WithErr(err).Errorf("get crd versions: %w", err)
+		return
+	}
+
+	for _, version := range versions {
+		cd := newCRD(name, crdObjectPath(crd, version), version, s)
+		for _, pf := range cd.PathFilters() {
+			pm.Register(ctx, pf)
+		}
 	}
 
 	if err := m.AddCRD(ctx, crd); err != nil {
-		logger.With("err", err).Errorf("unable to add CRD")
+		logger.WithErr(err).Errorf("unable to add CRD")
 	}
+}
+
+func crdVersions(crd *unstructured.Unstructured) ([]string, error) {
+	rawVersions, _, err := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	if err != nil {
+		return nil, fmt.Errorf("unable to extract versions from crd: %w", err)
+	}
+
+	var list []string
+
+	for _, rawVersion := range rawVersions {
+		versionDesc, ok := rawVersion.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("crd version descriptor was not an object (it was %T)", rawVersion)
+		}
+		versionName, found, err := unstructured.NestedString(versionDesc, "name")
+		if err != nil {
+			return nil, fmt.Errorf("unable to extract version name from version descriptor: %w", err)
+		}
+
+		if found {
+			list = append(list, versionName)
+		}
+	}
+
+	return list, nil
 }
 
 func DeleteCRD(ctx context.Context, crd *unstructured.Unstructured, pm *PathMatcher, crdSection *CRDSection, m module.Module) {
 	name := crd.GetName()
 
-	logger := log.From(ctx)
-	logger.With("crd-name", name).Debugf("deleting CRD")
+	logger := log.From(ctx).With("crd-name", name, "module", m.Name())
+	logger.Debugf("deleting CRD")
 
 	pm.Deregister(ctx, crdListPath(name))
-	pm.Deregister(ctx, crdObjectPath(name))
+
+	versions, err := crdVersions(crd)
+	if err != nil {
+		logger.WithErr(err).Errorf("get crd versions: %w", err)
+		return
+	}
+	for _, version := range versions {
+		pm.Deregister(ctx, crdObjectPath(crd, version))
+	}
 
 	crdSection.Remove(name)
 
 	if err := m.RemoveCRD(ctx, crd); err != nil {
-		logger.With("err", err).Errorf("unable to remove CRD")
+		logger.WithErr(err).Errorf("unable to remove CRD")
 	}
+
 }
 
 func crdListPath(name string) string {
 	return path.Join("/custom-resources", name)
 }
 
-func crdObjectPath(name string) string {
-	return path.Join(crdListPath(name), ResourceNameRegex)
+func crdObjectPath(object *unstructured.Unstructured, version string) string {
+	return path.Join(crdListPath(object.GetName()), version, ResourceNameRegex)
 }

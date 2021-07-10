@@ -1,0 +1,44 @@
+<div *ngIf="node" class="status">
+  <div class="card">
+    <div [ngClass]="indicatorClass()">
+      <progress value="100" max="100"></progress>
+    </div>
+    <div class="card-block">
+      <div class="card-title">
+        <span *ngIf="node && !node.path">{{ node.name }}</span>
+        <app-view-container
+          *ngIf="node && node.path"
+          [view]="node.path"
+        ></app-view-container>
+      </div>
+      <div *ngIf="node" class="card-text">
+        <ul class="node-status">
+          <li *ngFor="let detail of node.details; trackBy: detailsTrackBy">
+            <app-view-container [view]="detail"></app-view-container>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="properties">
+    <div>
+      <table class="table table-vertical">
+      <tbody>
+      <tr >
+        <th>Version</th>
+        <td>{{node.apiVersion}}</td>
+      </tr>
+      <tr>
+        <th>Kind</th>
+        <td>{{node.kind}}</td>
+      </tr>
+      <tr *ngFor="let prop of node.properties; trackBy: propertiesTrackBy">
+        <th>{{prop.label}}</th>
+        <td><app-view-container [view]="prop.value"></app-view-container></td>
+      </tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+</div>

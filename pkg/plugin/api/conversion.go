@@ -1,42 +1,44 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package api
 
 import (
-	"encoding/json"
-
+	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/wrappers"
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/vmware/octant/pkg/plugin/api/proto"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/util/json"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
+
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api/proto"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
 func convertFromKey(in store.Key) (*proto.KeyRequest, error) {
-	return &proto.KeyRequest{
+	keyRequest := proto.KeyRequest{
 		Namespace:  in.Namespace,
 		ApiVersion: in.APIVersion,
 		Kind:       in.Kind,
 		Name:       in.Name,
-	}, nil
+	}
+
+	if in.Selector != nil {
+		keyRequest.LabelSelector = &wrappers.BytesValue{Value: []byte(in.Selector.String())}
+	}
+
+	return &keyRequest, nil
 }
 
 func convertToKey(in *proto.KeyRequest) (store.Key, error) {
 	if in == nil {
 		return store.Key{}, errors.New("key request is nil")
-	}
-
-	matchLabels := labels.Set{}
-
-	value := in.GetLabelSelector()
-	if value != nil {
-		if err := json.Unmarshal(value.Value, &matchLabels); err != nil {
-			return store.Key{}, errors.Wrap(err, "unmarshal label selector")
-		}
 	}
 
 	key := store.Key{
@@ -46,11 +48,63 @@ func convertToKey(in *proto.KeyRequest) (store.Key, error) {
 		Name:       in.Name,
 	}
 
-	if len(matchLabels) > 0 {
+	labelSelector := in.GetLabelSelector()
+	if labelSelector != nil {
+		selector, err := metav1.ParseToLabelSelector(string(labelSelector.Value))
+		if err != nil {
+			return store.Key{}, errors.New("cannot parse selector string")
+		}
+
+		matchLabels := labels.Set{}
+		for label, value := range selector.MatchLabels {
+			matchLabels[label] = value
+		}
 		key.Selector = &matchLabels
 	}
 
 	return key, nil
+}
+
+func convertFromAlert(alert action.Alert) (*proto.AlertRequest, error) {
+	expiration, err := ptypes.TimestampProto(*alert.Expiration)
+	if err != nil {
+		return &proto.AlertRequest{}, err
+	}
+
+	alertRequest := proto.AlertRequest{
+		Type:       string(alert.Type),
+		Message:    alert.Message,
+		Expiration: expiration,
+	}
+
+	return &alertRequest, nil
+}
+
+func convertToAlert(in *proto.AlertRequest) (action.Alert, error) {
+	if in == nil {
+		return action.Alert{}, errors.New("alert request is nil")
+	}
+
+	expiration, err := ptypes.Timestamp(in.Expiration)
+	if err != nil {
+		return action.Alert{}, err
+	}
+
+	alert := action.Alert{
+		Type:       action.AlertType(in.Type),
+		Message:    in.Message,
+		Expiration: &expiration,
+	}
+
+	return alert, nil
+}
+
+func convertToLinkComponent(in, name string) (*component.Link, error) {
+	if in == "" {
+		return &component.Link{}, nil
+	}
+	link := component.NewLink("", name, in)
+	return link, nil
 }
 
 func convertFromObjects(in *unstructured.UnstructuredList) ([][]byte, error) {
@@ -80,6 +134,9 @@ func convertToObjects(in [][]byte) (*unstructured.UnstructuredList, error) {
 		if err != nil {
 			return nil, err
 		}
+		if object == nil {
+			continue
+		}
 		list.Items = append(list.Items, *object)
 	}
 
@@ -88,13 +145,17 @@ func convertToObjects(in [][]byte) (*unstructured.UnstructuredList, error) {
 
 func convertToObject(in []byte) (*unstructured.Unstructured, error) {
 	if in == nil {
-		return nil, errors.New("can't convert nil object")
+		return nil, nil
 	}
 
 	object := unstructured.Unstructured{}
 	err := json.Unmarshal(in, &object)
 	if err != nil {
 		return nil, err
+	}
+
+	if object.Object == nil {
+		return nil, nil
 	}
 
 	return &object, nil

@@ -1,24 +1,29 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
-	"fmt"
-
+	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
+
+	"github.com/vmware-tanzu/octant/pkg/action"
 )
+
+// EmptyContentResponse is an empty content response.
+var EmptyContentResponse = ContentResponse{}
 
 // ContentResponse is a a content response. It contains a
 // title and one or more components.
 type ContentResponse struct {
-	Title      []TitleComponent `json:"title,omitempty"`
-	Components []Component      `json:"viewComponents"`
-	IconName   string           `json:"iconName,omitempty"`
-	IconSource string           `json:"iconSource,omitempty"`
+	Title              []TitleComponent `json:"title,omitempty"`
+	Components         []Component      `json:"viewComponents"`
+	ExtensionComponent Component        `json:"extensionComponent,omitempty"`
+	TitleComponents    []Component      `json:"titleComponents,omitempty"`
 }
 
 // NewContentResponse creates an instance of ContentResponse.
@@ -28,16 +33,42 @@ func NewContentResponse(title []TitleComponent) *ContentResponse {
 	}
 }
 
-// Add adds zero or more components to a content response.
+// AddTitleComponents Adds any number of components to accompany the title
+func (c *ContentResponse) AddTitleComponents(components ...Component) {
+	for i := range components {
+		if components[i] != nil {
+			c.TitleComponents = append(c.TitleComponents, components[i])
+		}
+	}
+}
+
+// Add adds zero or more components to a content response. Nil components
+// will be ignored.
 func (c *ContentResponse) Add(components ...Component) {
-	c.Components = append(c.Components, components...)
+	for i := range components {
+		if components[i] != nil {
+			c.Components = append(c.Components, components[i])
+		}
+	}
+}
+
+// SetExtension adds zero or more components to an extension content response.
+func (c *ContentResponse) SetExtension(component *Extension) {
+	c.ExtensionComponent = component
+}
+
+// AddButton adds one or more actions to a content response.
+func (c *ContentResponse) AddButton(name string, payload action.Payload, buttonOptions ...ButtonOption) {
+	button := NewButton(name, payload, buttonOptions...)
+	c.TitleComponents = append(c.TitleComponents, button)
 }
 
 // UnmarshalJSON unmarshals a content response from JSON.
 func (c *ContentResponse) UnmarshalJSON(data []byte) error {
 	stage := struct {
-		Title      []TypedObject `json:"title,omitempty"`
-		Components []TypedObject `json:"viewComponents,omitempty"`
+		Title           []TypedObject `json:"title,omitempty"`
+		Components      []TypedObject `json:"viewComponents,omitempty"`
+		TitleComponents []TypedObject `json:"titleComponents,omitempty"`
 	}{}
 
 	if err := json.Unmarshal(data, &stage); err != nil {
@@ -45,12 +76,17 @@ func (c *ContentResponse) UnmarshalJSON(data []byte) error {
 	}
 
 	for _, t := range stage.Title {
-		title, err := getTitleByUnmarshalInterface(t.Config)
+		title, err := t.ToComponent()
 		if err != nil {
 			return err
 		}
 
-		c.Title = Title(NewText(title))
+		titleComponent, ok := title.(TitleComponent)
+		if !ok {
+			return errors.New("component in title isn't a title view component")
+		}
+
+		c.Title = append(c.Title, titleComponent)
 	}
 
 	for _, to := range stage.Components {
@@ -62,25 +98,21 @@ func (c *ContentResponse) UnmarshalJSON(data []byte) error {
 		c.Components = append(c.Components, vc)
 	}
 
+	for _, to := range stage.TitleComponents {
+		vc, err := to.ToComponent()
+		if err != nil {
+			return err
+		}
+
+		c.TitleComponents = append(c.TitleComponents, vc)
+	}
+
 	return nil
 }
 
-func getTitleByUnmarshalInterface(config json.RawMessage) (string, error) {
-	var objmap map[string]interface{}
-	if err := json.Unmarshal(config, &objmap); err != nil {
-		return "", err
-	}
-
-	if value, ok := objmap["value"].(string); ok {
-		return value, nil
-	}
-
-	return "", fmt.Errorf("title does not have a value")
-}
-
 type TypedObject struct {
-	Config   json.RawMessage `json:"config,omitempty"`
-	Metadata Metadata        `json:"metadata,omitempty"`
+	Config   jsoniter.RawMessage `json:"config,omitempty"`
+	Metadata Metadata            `json:"metadata,omitempty"`
 }
 
 func (to *TypedObject) ToComponent() (Component, error) {
@@ -116,10 +148,16 @@ func (m *Metadata) SetTitleText(parts ...string) {
 	m.Title = titleComponents
 }
 
+// SetTitle sets the title using the provided components
+func (m *Metadata) SetTitle(titleComponents []TitleComponent) {
+	m.Title = titleComponents
+}
+
 func (m *Metadata) UnmarshalJSON(data []byte) error {
 	x := struct {
-		Type  string        `json:"type,omitempty"`
-		Title []TypedObject `json:"title,omitempty"`
+		Type     string        `json:"type,omitempty"`
+		Title    []TypedObject `json:"title,omitempty"`
+		Accessor string        `json:"accessor,omitempty"`
 	}{}
 
 	if err := json.Unmarshal(data, &x); err != nil {
@@ -127,11 +165,12 @@ func (m *Metadata) UnmarshalJSON(data []byte) error {
 	}
 
 	m.Type = x.Type
+	m.Accessor = x.Accessor
 
 	for _, title := range x.Title {
 		vc, err := title.ToComponent()
 		if err != nil {
-			return errors.Wrap(err, "unmarshaling title")
+			return errors.Wrap(err, "unmarshal-ing title")
 		}
 
 		tvc, ok := vc.(TitleComponent)
@@ -148,12 +187,15 @@ func (m *Metadata) UnmarshalJSON(data []byte) error {
 // Component is a common interface for the data representation
 // of visual components as rendered by the UI.
 type Component interface {
-	json.Marshaler
+	MarshalJSON() ([]byte, error)
+	UnmarshalJSON([]byte) error
 
 	// GetMetadata returns metadata for the component.
 	GetMetadata() Metadata
-	// SetAccessor sets the accessfor the component.
-	SetAccessor(string)
+	// GetMetadata sets the metadata for the component.
+	SetMetadata(metadata Metadata)
+	// SetAccessor sets the accessor for the component.
+	SetAccessor(accessor string)
 	// IsEmpty returns true if the component is "empty".
 	IsEmpty() bool
 	// String returns a string representation of the component.
@@ -174,7 +216,15 @@ func Title(components ...TitleComponent) []TitleComponent {
 	return components
 }
 
-// TitleFromString is a convenience methods for create a title from a string.
+// TitleFromString is a convenience method for create a title from a string.
 func TitleFromString(s string) []TitleComponent {
 	return Title(NewText(s))
+}
+
+// TitleFromTitleComponent gets a title from a TitleComponent
+func TitleFromTitleComponent(tc []TitleComponent) (string, error) {
+	if len(tc) != 1 {
+		return "", errors.New("exactly one title component can be converted")
+	}
+	return tc[0].String(), nil
 }

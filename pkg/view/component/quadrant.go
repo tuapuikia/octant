@@ -1,13 +1,14 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"fmt"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 )
 
 // QuadrantPosition denotes a position within a quadrant
@@ -37,15 +38,18 @@ type QuadrantConfig struct {
 	SW QuadrantValue `json:"sw,omitempty"`
 }
 
+// Quadrant displays information in a quadrant.
+//
+// +octant:component
 type Quadrant struct {
-	base
+	Base
 	Config QuadrantConfig `json:"config"`
 }
 
 // NewQuadrant creates a quadrant component
 func NewQuadrant(title string) *Quadrant {
 	return &Quadrant{
-		base:   newBase(typeQuadrant, TitleFromString(title)),
+		Base:   newBase(TypeQuadrant, TitleFromString(title)),
 		Config: QuadrantConfig{},
 	}
 }
@@ -78,6 +82,6 @@ type quadrantMarshal Quadrant
 // MarshalJSON implements json.Marshaler
 func (t *Quadrant) MarshalJSON() ([]byte, error) {
 	m := quadrantMarshal(*t)
-	m.Metadata.Type = typeQuadrant
+	m.Metadata.Type = TypeQuadrant
 	return json.Marshal(&m)
 }

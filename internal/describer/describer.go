@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,25 +7,22 @@ package describer
 
 import (
 	"context"
+	"errors"
 	"sort"
 
-	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kLabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/internal/config"
-	"github.com/vmware/octant/internal/link"
-	"github.com/vmware/octant/internal/modules/overview/printer"
-	"github.com/vmware/octant/internal/queryer"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/config"
+	oerrors "github.com/vmware-tanzu/octant/internal/errors"
+	"github.com/vmware-tanzu/octant/internal/link"
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/printer"
+	"github.com/vmware-tanzu/octant/internal/queryer"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
-
-// EmptyContentResponse is an empty content response.
-var EmptyContentResponse = component.ContentResponse{}
 
 type ObjectLoaderFactory struct {
 	dashConfig config.Dash
@@ -38,15 +35,15 @@ func NewObjectLoaderFactory(dashConfig config.Dash) *ObjectLoaderFactory {
 }
 
 func (f *ObjectLoaderFactory) LoadObject(ctx context.Context, namespace string, fields map[string]string, objectStoreKey store.Key) (*unstructured.Unstructured, error) {
-	return LoadObject(ctx, f.dashConfig.ObjectStore(), namespace, fields, objectStoreKey)
+	return LoadObject(ctx, f.dashConfig.ObjectStore(), f.dashConfig.ErrorStore(), namespace, fields, objectStoreKey)
 }
 
 func (f *ObjectLoaderFactory) LoadObjects(ctx context.Context, namespace string, fields map[string]string, objectStoreKeys []store.Key) (*unstructured.UnstructuredList, error) {
-	return LoadObjects(ctx, f.dashConfig.ObjectStore(), namespace, fields, objectStoreKeys)
+	return LoadObjects(ctx, f.dashConfig.ObjectStore(), f.dashConfig.ErrorStore(), namespace, fields, objectStoreKeys)
 }
 
 // loadObject loads a single object from the object store.
-func LoadObject(ctx context.Context, objectStore store.Store, namespace string, fields map[string]string, objectStoreKey store.Key) (*unstructured.Unstructured, error) {
+func LoadObject(ctx context.Context, objectStore store.Store, errorStore oerrors.ErrorStore, namespace string, fields map[string]string, objectStoreKey store.Key) (*unstructured.Unstructured, error) {
 	objectStoreKey.Namespace = namespace
 
 	if name, ok := fields["name"]; ok && name != "" {
@@ -55,14 +52,28 @@ func LoadObject(ctx context.Context, objectStore store.Store, namespace string, 
 
 	object, err := objectStore.Get(ctx, objectStoreKey)
 	if err != nil {
+		var ae *oerrors.AccessError
+		if errors.As(err, &ae) {
+			if ae.Name() == oerrors.OctantAccessError {
+				found := errorStore.Add(ae)
+				if !found {
+					logger := log.From(ctx)
+					logger.WithErr(ae).Errorf("loadObject")
+				}
+				return &unstructured.Unstructured{}, nil
+			}
+		}
 		return nil, err
+	}
+	if object == nil {
+		return nil, errors.New("object was not found")
 	}
 
 	return object, nil
 }
 
 // loadObjects loads objects from the object store sorted by their name.
-func LoadObjects(ctx context.Context, objectStore store.Store, namespace string, fields map[string]string, objectStoreKeys []store.Key) (*unstructured.UnstructuredList, error) {
+func LoadObjects(ctx context.Context, objectStore store.Store, errorStore oerrors.ErrorStore, namespace string, fields map[string]string, objectStoreKeys []store.Key) (*unstructured.UnstructuredList, error) {
 	list := &unstructured.UnstructuredList{}
 
 	for _, objectStoreKey := range objectStoreKeys {
@@ -74,6 +85,17 @@ func LoadObjects(ctx context.Context, objectStore store.Store, namespace string,
 
 		storedObjects, _, err := objectStore.List(ctx, objectStoreKey)
 		if err != nil {
+			var ae *oerrors.AccessError
+			if errors.As(err, &ae) {
+				if ae.Name() == oerrors.OctantAccessError {
+					found := errorStore.Add(ae)
+					if !found {
+						logger := log.From(ctx)
+						logger.WithErr(ae).Errorf("load object")
+					}
+					return &unstructured.UnstructuredList{}, nil
+				}
+			}
 			return nil, err
 		}
 
@@ -107,15 +129,15 @@ type Options struct {
 
 // Describer creates content.
 type Describer interface {
-	Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error)
+	Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error)
 	PathFilters() []PathFilter
 	Reset(ctx context.Context) error
 }
 
 type base struct{}
 
-func (b base) Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error) {
-	return EmptyContentResponse, nil
+func (b base) Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error) {
+	return component.EmptyContentResponse, nil
 }
 
 func (b base) PathFilters() []PathFilter {
@@ -130,39 +152,6 @@ var _ Describer = (*base)(nil)
 
 func newBaseDescriber() *base {
 	return &base{}
-}
-
-func copyObjectMeta(to interface{}, from *unstructured.Unstructured) error {
-	object, ok := to.(metav1.Object)
-	if !ok {
-		return errors.Errorf("%T is not an object", to)
-	}
-
-	t, err := meta.TypeAccessor(object)
-	if err != nil {
-		return errors.Wrapf(err, "accessing type meta")
-	}
-	t.SetAPIVersion(from.GetAPIVersion())
-	t.SetKind(from.GetObjectKind().GroupVersionKind().Kind)
-
-	object.SetNamespace(from.GetNamespace())
-	object.SetName(from.GetName())
-	object.SetGenerateName(from.GetGenerateName())
-	object.SetUID(from.GetUID())
-	object.SetResourceVersion(from.GetResourceVersion())
-	object.SetGeneration(from.GetGeneration())
-	object.SetSelfLink(from.GetSelfLink())
-	object.SetCreationTimestamp(from.GetCreationTimestamp())
-	object.SetDeletionTimestamp(from.GetDeletionTimestamp())
-	object.SetDeletionGracePeriodSeconds(from.GetDeletionGracePeriodSeconds())
-	object.SetLabels(from.GetLabels())
-	object.SetAnnotations(from.GetAnnotations())
-	object.SetInitializers(from.GetInitializers())
-	object.SetOwnerReferences(from.GetOwnerReferences())
-	object.SetClusterName(from.GetClusterName())
-	object.SetFinalizers(from.GetFinalizers())
-
-	return nil
 }
 
 func isPod(object runtime.Object) bool {

@@ -1,15 +1,16 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"path/filepath"
 	"testing"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,8 +54,9 @@ func Test_Table_Marshal(t *testing.T) {
 		{
 			name: "general",
 			input: &Table{
-				base: newBase(typeTable, TitleFromString("my table")),
+				Base: newBase(TypeTable, TitleFromString("my table")),
 				Config: TableConfig{
+					Filters: map[string]TableFilter{},
 					Columns: []TableCol{
 						{Name: "Name", Accessor: "Name"},
 						{Name: "Description", Accessor: "Description"},
@@ -148,6 +150,7 @@ func Test_Table_Sort(t *testing.T) {
 		name     string
 		rows     []TableRow
 		reverse  bool
+		multiple bool
 		expected []TableRow
 	}{
 		{
@@ -178,15 +181,65 @@ func Test_Table_Sort(t *testing.T) {
 				{"a": NewText("1")},
 			},
 		},
+		{
+			name:     "multiple keys",
+			reverse:  false,
+			multiple: true,
+			rows: []TableRow{
+				{"a": NewText("1"), "b": NewText("2")},
+				{"a": NewText("1"), "b": NewText("1")},
+				{"a": NewText("1"), "b": NewText("3")},
+			},
+			expected: []TableRow{
+				{"a": NewText("1"), "b": NewText("1")},
+				{"a": NewText("1"), "b": NewText("2")},
+				{"a": NewText("1"), "b": NewText("3")},
+			},
+		},
+		{
+			name:     "multiple keys reversed",
+			reverse:  true,
+			multiple: true,
+			rows: []TableRow{
+				{"a": NewText("1"), "b": NewText("2")},
+				{"a": NewText("1"), "b": NewText("1")},
+				{"a": NewText("1"), "b": NewText("3")},
+			},
+			expected: []TableRow{
+				{"a": NewText("1"), "b": NewText("3")},
+				{"a": NewText("1"), "b": NewText("2")},
+				{"a": NewText("1"), "b": NewText("1")},
+			},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			table := NewTableWithRows("table", "placeholder", NewTableCols("a"), tc.rows)
-			table.Sort("a", tc.reverse)
+			if tc.multiple {
+				table.Sort("a", "b")
+			} else {
+				table.Sort("a")
+			}
+			if tc.reverse {
+				table.Reverse()
+			}
 			expected := NewTableWithRows("table", "placeholder", NewTableCols("a"), tc.expected)
 
 			assert.Equal(t, expected, table)
 		})
 	}
+}
+
+func TestTable_AddFilter(t *testing.T) {
+	table := NewTable("table", "placeholder", NewTableCols("a"))
+	filter := TableFilter{
+		Values:   []string{"foo", "bar"},
+		Selected: []string{"foo"},
+	}
+	table.AddFilter("a", filter)
+
+	expected := map[string]TableFilter{"a": filter}
+
+	assert.Equal(t, expected, table.Config.Filters)
 }

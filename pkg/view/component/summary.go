@@ -1,16 +1,21 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import (
+	"github.com/vmware-tanzu/octant/internal/util/json"
+
+	"github.com/vmware-tanzu/octant/internal/util/strings"
+)
 
 // SummaryConfig is the contents of a Summary
 type SummaryConfig struct {
-	Sections []SummarySection `json:"sections"`
-	Actions  []Action         `json:"actions,omitempty"`
+	Sections SummarySections `json:"sections"`
+	Actions  []Action        `json:"actions,omitempty"`
+	Alert    *Alert          `json:"alert,omitempty"`
 }
 
 // SummarySection is a section within a summary
@@ -58,8 +63,10 @@ func (t *SummarySection) UnmarshalJSON(data []byte) error {
 }
 
 // Summary contains other Components
+//
+// +octant:component
 type Summary struct {
-	base
+	Base
 	Config SummaryConfig `json:"config"`
 }
 
@@ -67,25 +74,53 @@ type Summary struct {
 func NewSummary(title string, sections ...SummarySection) *Summary {
 	s := append([]SummarySection(nil), sections...) // Make a copy
 	return &Summary{
-		base: newBase(typeSummary, TitleFromString(title)),
+		Base: newBase(TypeSummary, TitleFromString(title)),
 		Config: SummaryConfig{
 			Sections: s,
 		},
 	}
 }
 
-// GetMetadata accesses the components metadata. Implements Component.
-func (t *Summary) GetMetadata() Metadata {
-	return t.Metadata
-}
-
 func (t *Summary) AddAction(action Action) {
 	t.Config.Actions = append(t.Config.Actions, action)
 }
 
-// Add adds additional items to the tail of the summary.
+// Add adds additional items to the tail of the summary. If section with header name exists, replace it
+// instead of adding an additional item. Adding sections is concurrency safe.
 func (t *Summary) Add(sections ...SummarySection) {
-	t.Config.Sections = append(t.Config.Sections, sections...)
+	names := make(map[string]SummarySection)
+	var order []string
+	for _, existing := range t.Config.Sections {
+		names[existing.Header] = existing
+		order = append(order, existing.Header)
+	}
+
+	for _, section := range sections {
+		names[section.Header] = section
+		if !strings.Contains(section.Header, order) {
+			order = append(order, section.Header)
+		}
+	}
+
+	var update SummarySections
+	for i := range order {
+		update = append(update, names[order[i]])
+	}
+
+	t.Config.Sections = update
+}
+
+// AddSection adds a section to the tail of a summary.
+func (t *Summary) AddSection(header string, content Component) {
+	t.Add(SummarySection{
+		Header:  header,
+		Content: content,
+	})
+}
+
+// SetAlert sets an alert for the summary.
+func (t *Summary) SetAlert(alert Alert) {
+	t.Config.Alert = &alert
 }
 
 // Sections returns sections for the summary.
@@ -98,6 +133,6 @@ type summaryMarshal Summary
 // MarshalJSON implements json.Marshaler
 func (t *Summary) MarshalJSON() ([]byte, error) {
 	m := summaryMarshal(*t)
-	m.Metadata.Type = typeSummary
+	m.Metadata.Type = TypeSummary
 	return json.Marshal(&m)
 }

@@ -1,0 +1,44 @@
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.card {
+  :host-context(body) {
+    --tableLabel-color: #565656;
+    --tableValue-color: #737373;
+  }
+
+  :host-context(body.dark) {
+    --tableLabel-color: #eaedf0;
+    --tableValue-color: #acbac3;
+  }
+
+  .progress.loop {
+    height: 5px;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  .card-title {
+    margin: 0;
+  }
+
+  .left {
+    font-size: 0.65rem;
+    vertical-align: top;
+    padding-top: 4px;
+  }
+
+  .table-noborder {
+    td:first-child {
+      color: var(--tableLabel-color);
+      font-weight: 600;
+      padding-right: 24px;
+      white-space: nowrap;
+    }
+    td:last-child {
+      color: var(--tableValue-color);
+    }
+  }
+}

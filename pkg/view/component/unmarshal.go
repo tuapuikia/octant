@@ -1,12 +1,12 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/pkg/errors"
 )
@@ -16,97 +16,211 @@ func unmarshal(to TypedObject) (Component, error) {
 	var err error
 
 	switch to.Metadata.Type {
-	case typeCard:
-		t := &Card{base: base{Metadata: to.Metadata}}
+	case TypeAccordion:
+		t := &Accordion{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal accordion config")
+		o = t
+	case TypeAnnotations:
+		t := &Annotations{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal annotations config")
+		o = t
+	case TypeButton:
+		t := &Button{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal button config")
+		o = t
+	case TypeButtonGroup:
+		t := &ButtonGroup{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal buttonGroup config")
+		o = t
+	case TypeCard:
+		t := &Card{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal card config")
 		o = t
-	case typeCardList:
-		t := &CardList{base: base{Metadata: to.Metadata}}
+	case TypeCardList:
+		t := &CardList{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal cardList config")
 		o = t
-	case typeContainers:
-		t := &Containers{base: base{Metadata: to.Metadata}}
+	case TypeCode:
+		t := &Code{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal code config")
+		o = t
+	case TypeContainers:
+		t := &Containers{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal containers config")
 		o = t
-	case typeExpressionSelector:
-		t := &ExpressionSelector{base: base{Metadata: to.Metadata}}
+	case TypeDonutChart:
+		t := &DonutChart{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal donutChart config")
+		o = t
+	case TypeDropdown:
+		t := &Dropdown{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal dropdown config")
+		o = t
+	case TypeEditor:
+		t := &Editor{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal editor config")
+		o = t
+	case TypeError:
+		t := &Error{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal error config")
+		o = t
+	case TypeExpressionSelector:
+		t := &ExpressionSelector{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal expressionSelector config")
 		o = t
-	case typeFlexLayout:
-		t := &FlexLayout{base: base{Metadata: to.Metadata}}
+	case TypeExpandableRowDetail:
+		t := &ExpandableRowDetail{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
-			"unmarshal expressionSelector config")
+			"unmarshal expandable row detail config")
 		o = t
-	case typeGraphviz:
-		t := &Graphviz{base: base{Metadata: to.Metadata}}
+	case TypeFlexLayout:
+		t := &FlexLayout{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal flexlayout config")
+		o = t
+	case TypeFormField:
+		t := &FormField{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal form field config")
+		o = t
+	case TypeGraphviz:
+		t := &Graphviz{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal graphviz config")
 		o = t
-	case typeLabels:
-		t := &Labels{base: base{Metadata: to.Metadata}}
+	case TypeGridActions:
+		t := &GridActions{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal gridActions config")
+		o = t
+	case TypeIFrame:
+		t := &IFrame{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal iframe config")
+		o = t
+	case TypeJSONEditor:
+		t := &JSONEditor{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal jsonEditor config")
+		o = t
+	case TypeLabels:
+		t := &Labels{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal labels config")
 		o = t
-	case typeLabelSelector:
-		t := &LabelSelector{base: base{Metadata: to.Metadata}}
+	case TypeLabelSelector:
+		t := &LabelSelector{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal labelSelector config")
 		o = t
-	case typeLoading:
-		t := &Loading{base: base{Metadata: to.Metadata}}
+	case TypeLoading:
+		t := &Loading{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal loading config")
 		o = t
-	case typeLink:
-		t := &Link{base: base{Metadata: to.Metadata}}
+	case TypeLink:
+		t := &Link{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal link config")
 		o = t
-	case typeList:
-		t := &List{base: base{Metadata: to.Metadata}}
+	case TypeList:
+		t := &List{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal list config")
 		o = t
-	case typeQuadrant:
-		t := &Quadrant{base: base{Metadata: to.Metadata}}
+	case TypeLogs:
+		t := &Logs{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal logs config")
+		o = t
+	case TypeModal:
+		t := &Modal{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal modal config")
+		o = t
+	case TypeQuadrant:
+		t := &Quadrant{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal quadrant config")
 		o = t
-	case typeResourceViewer:
-		t := &ResourceViewer{base: base{Metadata: to.Metadata}}
+	case TypeResourceViewer:
+		t := &ResourceViewer{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal resourceViewer config")
 		o = t
-	case typeSelectors:
-		t := &Selectors{base: base{Metadata: to.Metadata}}
+	case TypeSelectFile:
+		t := &SelectFile{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal select file config")
+		o = t
+	case TypeSelectors:
+		t := &Selectors{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal selectors config")
 		o = t
-	case typeSummary:
-		t := &Summary{base: base{Metadata: to.Metadata}}
+	case TypeSingleStat:
+		t := &SingleStat{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal singleStat config")
+		o = t
+	case TypeStepper:
+		t := &Stepper{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal stepper config")
+		o = t
+	case TypeSummary:
+		t := &Summary{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal summary config")
 		o = t
-	case typeTable:
-		t := &Table{base: base{Metadata: to.Metadata}}
+	case TypeTable:
+		t := &Table{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal table config")
 		o = t
-	case typeText:
-		t := &Text{base: base{Metadata: to.Metadata}}
+	case TypeText:
+		t := &Text{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal text config")
 		o = t
-	case typeTimestamp:
-		t := &Timestamp{base: base{Metadata: to.Metadata}}
+	case TypeTimeline:
+		t := &Timeline{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal timeline config")
+		o = t
+	case TypeTimestamp:
+		t := &Timestamp{Base: Base{Metadata: to.Metadata}}
 		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
 			"unmarshal timestamp config")
 		o = t
-
+	case TypeIcon:
+		t := &Icon{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal icon config")
+		o = t
+	case TypeSignpost:
+		t := &Signpost{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal signpost config")
+		o = t
+	case TypeTabsView:
+		t := &TabsView{Base: Base{Metadata: to.Metadata}}
+		err = errors.Wrapf(json.Unmarshal(to.Config, &t.Config),
+			"unmarshal tabs config")
+		o = t
 	default:
 		return nil, errors.Errorf("unknown view component %q", to.Metadata.Type)
 	}

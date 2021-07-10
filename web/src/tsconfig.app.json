@@ -1,12 +1,19 @@
 {
-  "extends": "../tsconfig.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "../out-tsc/app",
-    "types": []
+    "typeRoots": [
+      "./types"
+    ],
+    "lib": ["es5", "es6", "dom"]
   },
+  "files": [
+    "main.ts",
+    "polyfills.ts",
+    "../node_modules/electron/electron.d.ts"
+  ],
   "exclude": [
-    "test.ts",
-    "**/*.spec.ts",
-    "**/*.stub.ts",
+    "**/*.stories.ts"
   ]
 }
+

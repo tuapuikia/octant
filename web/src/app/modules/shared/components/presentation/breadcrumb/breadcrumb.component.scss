@@ -1,0 +1,57 @@
+/* Copyright (c) 2020 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:host-context(body) {
+  --creadcrumb-link-color: #0079b8;
+}
+
+:host-context(body.dark) {
+  --creadcrumb-link-color: #49afd9;
+}
+
+:host ::ng-deep .breadcrumb .dropdown {
+  margin: 0px;
+
+  .source {
+    padding-right: 0.4rem;
+  }
+
+  .ng-star-inserted {
+    .dropdown-link-icon {
+      width: 0.8rem;
+      height: 0.8rem;
+      margin-left: 0px;
+    }
+
+    .dropdown-link-icon:hover {
+      color: var(--link-color);
+    }
+  }
+}
+
+.breadcrumb {
+  &-body {
+    display: flex;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+  }
+
+  &-header {
+    margin-top: 0rem;
+    line-height: 1.4rem;
+  }
+
+  &-span {
+    padding-right: 0.5rem;
+  }
+
+  .separator {
+    margin-right: 0.2rem;
+    transform: rotate(90deg);
+  }
+
+  a {
+    color: var(--creadcrumb-link-color);
+  }
+}

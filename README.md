@@ -1,10 +1,11 @@
 ![Logo][octant-logo]
 
-[![Build Status](https://cloud.drone.io/api/badges/vmware/octant/status.svg)](https://cloud.drone.io/vmware/octant)
-![GitHub release](https://img.shields.io/github/release/vmware/octant.svg)
+[![Build Status](https://github.com/vmware-tanzu/octant/workflows/preflight-checks/badge.svg)](https://github.com/vmware-tanzu/octant/workflows/preflight-checks/badge.svg)
+![GitHub release](https://img.shields.io/github/release/vmware-tanzu/octant.svg)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/4142/badge)](https://bestpractices.coreinfrastructure.org/projects/4142)
 
-> A web-based, highly extensible platform for developers to better understand the complexity of Kubernetes clusters.
+> A highly extensible platform for developers to better understand the complexity of Kubernetes clusters.
 
 Octant is a tool for developers to understand how applications run on a Kubernetes cluster. It aims to be part of the developer's toolkit for gaining insight and approaching complexity found in Kubernetes. Octant offers a combination of introspective tooling, cluster navigation, and object management along with a plugin system to further extend its capabilities.
 
@@ -12,7 +13,7 @@ Octant is a tool for developers to understand how applications run on a Kubernet
 
 * **Resource Viewer**
 
-    Graphically visualizate relationships between objects in a Kubernetes cluster. The status of individual objects are represented by color to show workload performance.
+    Graphically visualize relationships between objects in a Kubernetes cluster. The status of individual objects are represented by color to show workload performance.
 
 * **Summary View**
 
@@ -21,7 +22,7 @@ Octant is a tool for developers to understand how applications run on a Kubernet
 * **Port Forward**
 
     Forward a local port to a running pod with a single button for debugging applications and even port forward multiple pods across namespaces.
- 
+
 * **Log Stream**
 
     View log streams of pod and container activity for troubleshooting or monitoring without holding multiple terminals open.
@@ -40,13 +41,13 @@ Octant is a tool for developers to understand how applications run on a Kubernet
 
 ## Usage
 
-![Octant demo](docs/octant-demo.gif)
+![Octant demo](web/src/assets/octant-demo.gif)
 
 ## Installation
 
 ### Package (Linux only)
 
-1. Download the `.deb` or `.rpm` from the [releases page](https://github.com/vmware/octant/releases).
+1. Download the `.deb` or `.rpm` from the [releases page](https://github.com/vmware-tanzu/octant/releases).
 
 2. Install with either `dpkg -i` or `rpm -i` respectively.
 
@@ -68,15 +69,25 @@ Octant is a tool for developers to understand how applications run on a Kubernet
    scoop bucket add extras
    ```
 
- 2. Install using scoop.
+2. Install using scoop.
 
    ```sh
    scoop install octant
    ```
 
+### macOS
+
+#### Homebrew
+
+1. Install using Homebrew with the following one-liner:
+
+   ```sh
+   brew install octant
+   ```
+
 ### Download a Pre-built Binary (Linux, macOS, Windows)
 
-1. Open the [releases page](https://github.com/vmware/octant/releases) from a browser and download the latest tarball or zip file.
+1. Open the [releases page](https://github.com/vmware-tanzu/octant/releases) from a browser and download the latest tarball or zip file.
 
 2. Extract the tarball or zip where `X.Y` is the release version:
 
@@ -92,6 +103,15 @@ Octant is a tool for developers to understand how applications run on a Kubernet
     $ ./octant_0.X.Y_Linux-64bit/octant version
     ```
 
+## Nightly Builds
+
+Nightly builds of Octant are available for download.
+
+Please note that nightly builds maybe less stable than our tagged releases and are intended to allow early access to
+preview upcoming features and for plugin authors who want access to the latest plugin APIs.
+
+[Browse nightly builds](https://console.cloud.google.com/storage/browser/octant-nightlies)
+
 ## Getting Started
 
 Before starting Octant, make sure you have access to a healthy cluster. If kubectl is installed, test using `kubectl cluster-info`.
@@ -102,33 +122,50 @@ Start running Octant:
 
 Octant should immediately launch your default web browser on `127.0.0.1:7777`.
 
-Or to run it on a specific host and fixed port:
-`$ OCTANT_LISTENER_ADDR=0.0.0.0:8900 octant`
+Octant uses the default web browser on the system to act as the UI client. In the future Octant will ship with a UI.
 
-For configuring Octant, setting up a development environment, or running tests, refer to the documentation [here](docs/getting-started.md).
+For setting extra configuration such as what kubeconfig or context to use at startup, refer to the [documentation](https://reference.octant.dev/).
+
+## Supported Versions
+
+Octant versions follow [Semantic Versioning](https://semver.org/) where a given version number represents `MAJOR.MINOR.PATCH`.
+
+Patch releases address bug fixes, regressions, and small enhancements.
+
+Minor releases contain security fixes, API changes, and significant enhancements such as UI changes or new components.
+
+Major releases contain breaking changes that are not guaranteed to be backwards compatible. Octant versions before 1.0 should not be considered stable and API may change between minor releases.
+
+### Supported Version Skew
+
+Version of Octant are compiled against a version of client-go.
+
+Octant follows an `n±1` policy for versions of Kubernetes similar to kubectl. For example, Octant `0.16.0` uses the Kubernetes 1.19 client. So version `0.16.0` can be used with Kubernetes 1.18, 1.19, and 1.20.
 
 ## Plugins
 
 Plugins are a core part of Octant in the Kubernetes ecosystem. A plugin can read objects and allows users to add components to Octant's views.
 
-An example plugin can be found in [`cmd/octant-sample-plugin`](cmd/octant-sample-plugin) and installed to the default plugin path with `make install-test-plugin`.
+An example plugin can be found in [`cmd/octant-sample-plugin`](cmd/octant-sample-plugin) and installed to the default plugin path with `go run build.go install-test-plugin`.
 
-Documentation for plugin components can be found in [`docs/plugins`](docs/plugins).
+Some plugins can be found on GitHub in the [`#octant-plugin`](https://github.com/topics/octant-plugin) topic (tag).
+
+Documentation for plugin components can be found in the [Plugins section](https://reference.octant.dev/?path=/docs/docs-plugins-1-getting-started--page) of the documentation.
 
 ## Discussion
 
 Feature requests, bug reports, and enhancements are welcome. Contributors, maintainers, and users are encouraged to collaborate through these communication channels:
 
- - [Kubernetes Slack](http://slack.k8s.io/) in the [#octant](https://kubernetes.slack.com/messages/CM37M9FCG) channel
+ - [Kubernetes Slack](http://slack.k8s.io/) in the [#octant](https://kubernetes.slack.com/app_redirect?channel=CM37M9FCG) channel
  - [Twitter](https://twitter.com/projectoctant)
  - [Google group](https://groups.google.com/forum/#!forum/project-octant/)
- - [GitHub issues](https://github.com/vmware/octant/issues)
+ - [GitHub issues](https://github.com/vmware-tanzu/octant/issues)
 
 ## Contributing
 
-New contributors will need to sign a contributor license agreement before code changes can be merged. Follow the instructions given by `vmwclabot` after opening a pull request.
+Contributors will need to sign a DCO (Developer Certificate of Origin) with all changes. We also ask that a changelog entry is included with your pull request. Details are described in our [contributing](CONTRIBUTING.md) documentation.
 
-Pull requests should also include a changelog with the naming convention described [here](CONTRIBUTING.md).
+See our [hacking](HACKING.md) guide for getting your development environment setup.
 
 See our [roadmap](ROADMAP.md) for tentative features in a 1.0 release.
 
@@ -136,4 +173,4 @@ See our [roadmap](ROADMAP.md) for tentative features in a 1.0 release.
 
 Octant is available under the [Apache License, Version 2.0](LICENSE)
 
-[octant-logo]: /docs/octant-logo.png
+[octant-logo]: /web/src/assets/octant-logo.png

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,19 +11,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apiextv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/internal/testutil"
 )
 
 func TestObjectPathConfig_Validate(t *testing.T) {
 	tests := []struct {
-		name           string
-		moduleName     string
-		pathLookupFunc PathLookupFunc
-		crdPathGenFunc CRDPathGenFunc
-		isErr          bool
+		name                  string
+		moduleName            string
+		pathLookupFunc        PathLookupFunc
+		crdPathGenFunc        CRDPathGenFunc
+		reversePathLookupFunc ReversePathLookupFunc
+		isErr                 bool
 	}{
 		{
 			name:       "in general",
@@ -31,7 +31,10 @@ func TestObjectPathConfig_Validate(t *testing.T) {
 			pathLookupFunc: func(string, string, string, string) (string, error) {
 				return "/path", nil
 			},
-			crdPathGenFunc: func(string, string, string) (string, error) {
+			reversePathLookupFunc: func(string, string) (schema.GroupVersionKind, error) {
+				return schema.GroupVersionKind{Group: "group", Version: "v1", Kind: "kind"}, nil
+			},
+			crdPathGenFunc: func(string, string, string, string) (string, error) {
 				return "/path", nil
 			},
 		},
@@ -40,9 +43,10 @@ func TestObjectPathConfig_Validate(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config := ObjectPathConfig{
-				ModuleName:     test.moduleName,
-				PathLookupFunc: test.pathLookupFunc,
-				CRDPathGenFunc: test.crdPathGenFunc,
+				ModuleName:            test.moduleName,
+				PathLookupFunc:        test.pathLookupFunc,
+				CRDPathGenFunc:        test.crdPathGenFunc,
+				ReversePathLookupFunc: test.reversePathLookupFunc,
 			}
 
 			err := config.Validate()
@@ -63,7 +67,10 @@ func TestObjectPath(t *testing.T) {
 		PathLookupFunc: func(string, string, string, string) (string, error) {
 			return "/path", nil
 		},
-		CRDPathGenFunc: func(string, string, string) (string, error) {
+		ReversePathLookupFunc: func(string, string) (schema.GroupVersionKind, error) {
+			return schema.GroupVersionKind{Group: "group", Version: "v1", Kind: "kind"}, nil
+		},
+		CRDPathGenFunc: func(string, string, string, string) (string, error) {
 			return "/crd-path", nil
 		},
 	}
@@ -72,18 +79,7 @@ func TestObjectPath(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	crd := testutil.CreateCRD("my-crd")
-	crd.Spec.Group = "group"
-
-	crd.Spec.Versions = []apiextv1beta1.CustomResourceDefinitionVersion{
-		{
-			Name: "v1",
-		},
-	}
-
-	crd.Spec.Names = apiextv1beta1.CustomResourceDefinitionNames{
-		Kind: "kind",
-	}
+	crd := testutil.CreateCRD("my-crd", testutil.WithGenericCRD())
 
 	err = objectPath.AddCRD(ctx, testutil.ToUnstructured(t, crd))
 	require.NoError(t, err)
@@ -104,40 +100,8 @@ func TestObjectPath(t *testing.T) {
 	require.NotContains(t, objectPath.crds, crd.Name)
 }
 
-func TestCRDResourceGVKs(t *testing.T) {
-	crd := testutil.CreateCRD("my-crd")
-	crd.Spec.Group = "group"
-
-	crd.Spec.Versions = []apiextv1beta1.CustomResourceDefinitionVersion{
-		{
-			Name: "v1",
-		},
-	}
-
-	crd.Spec.Names = apiextv1beta1.CustomResourceDefinitionNames{
-		Kind: "kind",
-	}
-
-	got, err := CRDResourceGVKs(testutil.ToUnstructured(t, crd))
-	require.NoError(t, err)
-
-	expected := []schema.GroupVersionKind{
-		{Group: "group", Version: "v1", Kind: "kind"},
-	}
-
-	assert.Equal(t, expected, got)
-}
-
 func TestCRDAPIVersions(t *testing.T) {
-	crd := testutil.CreateCRD("my-crd")
-	crd.Spec.Group = "group"
-
-	crd.Spec.Versions = []apiextv1beta1.CustomResourceDefinitionVersion{
-		{
-			Name: "v1",
-		},
-	}
-
+	crd := testutil.CreateCRD("my-crd", testutil.WithGenericCRD())
 	got, err := CRDAPIVersions(testutil.ToUnstructured(t, crd))
 	require.NoError(t, err)
 

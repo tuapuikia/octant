@@ -1,0 +1,55 @@
+<div class="octant-container">
+  <div class="main-container">
+    <div class="notifier">
+      <app-notifier></app-notifier>
+    </div>
+    <div class="uploader">
+      <app-uploader></app-uploader>
+    </div>
+    <header class="header header-6">
+      <div class="branding">
+        <a [routerLink]="['/']">
+          <clr-icon shape="octant-logo"></clr-icon>
+          <span class="title">Octant</span>
+        </a>
+      </div>
+        <!-- Navigation items -->
+      <div class="header-nav">
+        <clr-icon *ngIf="isElectron" class="header-centered" (click)="back()" shape="caret left" size="24"></clr-icon>
+        <clr-icon *ngIf="isElectron" class="header-centered" (click)="forward()" shape="caret right" size="24"></clr-icon>
+        <div class="input-filter">
+          <app-input-filter></app-input-filter>
+        </div>
+      </div>
+      <div class="header-actions">
+        <app-apply-yaml class="header-centered"></app-apply-yaml>
+        <div class="namespace-switcher header-centered">
+          <app-namespace></app-namespace>
+        </div>
+        <app-context-selector class="header-centered"></app-context-selector>
+        <app-helper class="header-centered"></app-helper>
+      </div>
+    </header>
+    <div class="content-container">
+      <div class="navigation">
+        <app-navigation></app-navigation>
+      </div>
+      <div class="content-area">
+        <router-outlet></router-outlet>
+      </div>
+    </div>
+  </div>
+  <app-bottom-panel *ngIf="isBottomPanelEnabled"></app-bottom-panel>
+</div>
+<div class="quick-switcher">
+  <app-quick-switcher></app-quick-switcher>
+</div>
+<div class="preferences">
+  <app-preferences
+    [(isOpen)]="preferencesOpened"
+    [preferences]="preferences"
+    (preferencesChanged)="preferencesChanged($event)"
+    (isOpenChange)="preferencesOpenChanged($event)"
+    (reset)="onReset()"
+></app-preferences>
+</div>

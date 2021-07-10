@@ -1,15 +1,17 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import "github.com/vmware-tanzu/octant/internal/util/json"
 
 // Annotations is a component representing key/value based annotations
+//
+// +octant:component
 type Annotations struct {
-	base
+	Base
 	Config AnnotationsConfig `json:"config"`
 }
 
@@ -21,7 +23,7 @@ type AnnotationsConfig struct {
 // NewAnnotations creates a annotations component
 func NewAnnotations(annotations map[string]string) *Annotations {
 	return &Annotations{
-		base: newBase(typeAnnotations, nil),
+		Base: newBase(TypeAnnotations, nil),
 		Config: AnnotationsConfig{
 			Annotations: annotations,
 		},

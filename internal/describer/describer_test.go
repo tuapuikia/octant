@@ -1,16 +1,16 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package describer
 
 import (
-	"encoding/json"
-
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/util/json"
+
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 type emptyComponent struct{}
@@ -21,6 +21,15 @@ func (c *emptyComponent) GetMetadata() component.Metadata {
 	return component.Metadata{
 		Type: "empty",
 	}
+}
+
+func (c *emptyComponent) UnmarshalJSON(b []byte) error {
+	var m interface{}
+
+	return json.Unmarshal(b, m)
+}
+
+func (c *emptyComponent) SetMetadata(_ component.Metadata) {
 }
 
 func (c *emptyComponent) SetAccessor(string) {
@@ -59,10 +68,10 @@ func createPodTable(pods ...corev1.Pod) *component.Table {
 	return table
 }
 
-func podListType() interface{} {
+func PodListType() interface{} {
 	return &corev1.PodList{}
 }
 
-func podObjectType() interface{} {
+func PodObjectType() interface{} {
 	return &corev1.Pod{}
 }

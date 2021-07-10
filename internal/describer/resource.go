@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,13 +7,13 @@ package describer
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"reflect"
 
-	"github.com/vmware/octant/pkg/icon"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 const (
@@ -48,12 +48,11 @@ func NewResource(options ResourceOptions) *Resource {
 	}
 }
 
-func (r *Resource) Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error) {
-	return r.List().Describe(ctx, prefix, namespace, options)
+func (r *Resource) Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error) {
+	return r.List().Describe(ctx, namespace, options)
 }
 
 func (r *Resource) List() *List {
-	iconName, iconSource := loadIcon(r.IconName)
 
 	return NewList(
 		ListConfig{
@@ -67,14 +66,11 @@ func (r *Resource) List() *List {
 				return reflect.New(reflect.ValueOf(r.ObjectType).Elem().Type()).Interface()
 			},
 			IsClusterWide: r.ClusterWide,
-			IconName:      iconName,
-			IconSource:    iconSource,
 		},
 	)
 }
 
 func (r *Resource) Object() *Object {
-	iconName, iconSource := loadIcon(r.IconName)
 
 	return NewObject(
 		ObjectConfig{
@@ -84,9 +80,6 @@ func (r *Resource) Object() *Object {
 			ObjectType: func() interface{} {
 				return reflect.New(reflect.ValueOf(r.ObjectType).Elem().Type()).Interface()
 			},
-			DisableResourceViewer: r.DisableResourceViewer,
-			IconName:              iconName,
-			IconSource:            iconSource,
 		},
 	)
 }
@@ -100,13 +93,10 @@ func (r *Resource) PathFilters() []PathFilter {
 	return filters
 }
 
-func loadIcon(name string) (string, string) {
-	source, err := icon.LoadIcon(name)
-	if err != nil {
-		return name, ""
+func getCrdUrl(namespace string, crd *unstructured.Unstructured) string {
+	ref := path.Join("/overview/namespace", namespace, "custom-resources", crd.GetName())
+	if namespace == "" {
+		ref = path.Join("/cluster-overview/custom-resources", crd.GetName())
 	}
-
-	internalName := fmt.Sprintf("internal:%s", name)
-
-	return internalName, source
+	return ref
 }

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,10 +11,10 @@ import (
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes/scheme"
 
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/util/kubernetes"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 type ListConfig struct {
@@ -24,8 +24,6 @@ type ListConfig struct {
 	ListType      func() interface{}
 	ObjectType    func() interface{}
 	IsClusterWide bool
-	IconName      string
-	IconSource    string
 }
 
 // List describes a list of objects.
@@ -38,8 +36,6 @@ type List struct {
 	objectType     func() interface{}
 	objectStoreKey store.Key
 	isClusterWide  bool
-	iconName       string
-	iconSource     string
 }
 
 // NewList creates an instance of List.
@@ -52,15 +48,13 @@ func NewList(c ListConfig) *List {
 		listType:       c.ListType,
 		objectType:     c.ObjectType,
 		isClusterWide:  c.IsClusterWide,
-		iconName:       c.IconName,
-		iconSource:     c.IconSource,
 	}
 }
 
 // Describe creates content.
-func (d *List) Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error) {
+func (d *List) Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error) {
 	if options.Printer == nil {
-		return EmptyContentResponse, errors.New("object list Describer requires a printer")
+		return component.EmptyContentResponse, errors.New("object list Describer requires a printer")
 	}
 
 	// Pass through selector if provided to filter objects
@@ -73,11 +67,11 @@ func (d *List) Describe(ctx context.Context, prefix, namespace string, options O
 
 	objectList, err := options.LoadObjects(ctx, namespace, options.Fields, []store.Key{key})
 	if err != nil {
-		return EmptyContentResponse, err
+		return component.EmptyContentResponse, err
 	}
 
-	list := component.NewList(d.title, nil)
-	list.SetIcon(d.iconName, d.iconSource)
+	title := component.Title(component.NewText(d.title))
+	list := component.NewList(title, nil)
 
 	listType := d.listType()
 
@@ -87,12 +81,8 @@ func (d *List) Describe(ctx context.Context, prefix, namespace string, options O
 	// Convert unstructured objects to typed runtime objects
 	for i := range objectList.Items {
 		item := d.objectType()
-		if err := scheme.Scheme.Convert(&objectList.Items[i], item, nil); err != nil {
-			return EmptyContentResponse, err
-		}
-
-		if err := copyObjectMeta(item, &objectList.Items[i]); err != nil {
-			return EmptyContentResponse, err
+		if err := kubernetes.FromUnstructured(&objectList.Items[i], item); err != nil {
+			return component.EmptyContentResponse, err
 		}
 
 		newSlice := reflect.Append(f, reflect.ValueOf(item).Elem())
@@ -101,13 +91,13 @@ func (d *List) Describe(ctx context.Context, prefix, namespace string, options O
 
 	listObject, ok := listType.(runtime.Object)
 	if !ok {
-		return EmptyContentResponse, errors.Errorf("expected list to be a runtime object. It was a %T",
+		return component.EmptyContentResponse, errors.Errorf("expected list to be a runtime object. It was a %T",
 			listType)
 	}
 
-	viewComponent, err := options.Printer.Print(ctx, listObject, options.PluginManager())
+	viewComponent, err := options.Printer.Print(ctx, listObject)
 	if err != nil {
-		return EmptyContentResponse, err
+		return component.EmptyContentResponse, err
 	}
 
 	if viewComponent != nil {

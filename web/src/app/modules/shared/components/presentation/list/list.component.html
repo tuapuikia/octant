@@ -1,0 +1,6 @@
+<ng-container *ngFor="let item of items; trackBy: identifyItem">
+  <app-view-container
+    [view]="item"
+    (viewInit)="initDone()"
+  ></app-view-container>
+</ng-container>

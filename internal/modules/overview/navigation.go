@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,10 +8,10 @@ package overview
 import (
 	"context"
 
-	"github.com/vmware/octant/internal/loading"
-	"github.com/vmware/octant/pkg/icon"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/loading"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
 var (
@@ -28,24 +28,25 @@ var (
 func workloadEntries(ctx context.Context, prefix, namespace string, objectStore store.Store, _ bool) ([]navigation.Navigation, bool, error) {
 	neh := navigation.EntriesHelper{}
 
-	neh.Add("Cron Jobs", "cron-jobs", icon.OverviewCronJob,
-		loading.IsObjectLoading(ctx, namespace, workloadsCronJobs, objectStore))
-	neh.Add("Daemon Sets", "daemon-sets", icon.OverviewDaemonSet,
-		loading.IsObjectLoading(ctx, namespace, workloadsDaemonSets, objectStore))
-	neh.Add("Deployments", "deployments", icon.OverviewDeployment,
-		loading.IsObjectLoading(ctx, namespace, workloadsDeployments, objectStore))
-	neh.Add("Jobs", "jobs", icon.OverviewJob,
-		loading.IsObjectLoading(ctx, namespace, workloadsJobs, objectStore))
-	neh.Add("Pods", "pods", icon.OverviewPod,
-		loading.IsObjectLoading(ctx, namespace, workloadsPods, objectStore))
-	neh.Add("Replica Sets", "replica-sets", icon.OverviewReplicaSet,
-		loading.IsObjectLoading(ctx, namespace, workloadsReplicaSets, objectStore))
-	neh.Add("Replication Controllers", "replication-controllers", icon.OverviewReplicationController,
-		loading.IsObjectLoading(ctx, namespace, workloadsReplicationControllers, objectStore))
-	neh.Add("Stateful Sets", "stateful-sets", icon.OverviewStatefulSet,
-		loading.IsObjectLoading(ctx, namespace, workloadsStatefulSets, objectStore))
+	neh.Add("Cron Jobs", "cron-jobs",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.CronJob), objectStore))
+	neh.Add("Daemon Sets", "daemon-sets",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.DaemonSet), objectStore))
+	neh.Add("Deployments", "deployments",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Deployment), objectStore))
+	neh.Add("Jobs", "jobs",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Job), objectStore))
+	neh.Add("Pods", "pods",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Pod), objectStore))
+	neh.Add("Replica Sets", "replica-sets",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.ExtReplicaSet), objectStore))
+	neh.Add("Replication Controllers", "replication-controllers",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.ReplicationController), objectStore))
+	neh.Add("Stateful Sets", "stateful-sets",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.StatefulSet), objectStore))
 
-	children, err := neh.Generate(prefix)
+	children, err := neh.Generate(prefix, namespace, "")
+
 	if err != nil {
 		return nil, false, err
 	}
@@ -55,12 +56,17 @@ func workloadEntries(ctx context.Context, prefix, namespace string, objectStore 
 
 func discoAndLBEntries(ctx context.Context, prefix, namespace string, objectStore store.Store, _ bool) ([]navigation.Navigation, bool, error) {
 	neh := navigation.EntriesHelper{}
-	neh.Add("Ingresses", "ingresses", icon.OverviewIngress,
-		loading.IsObjectLoading(ctx, namespace, dlbIngresses, objectStore))
-	neh.Add("Services", "services", icon.OverviewService,
-		loading.IsObjectLoading(ctx, namespace, dlbServices, objectStore))
 
-	children, err := neh.Generate(prefix)
+	neh.Add("Horizontal Pod Autoscalers", "horizontal-pod-autoscalers",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.HorizontalPodAutoscaler), objectStore))
+	neh.Add("Ingresses", "ingresses",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Ingress), objectStore))
+	neh.Add("Services", "services",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Service), objectStore))
+	neh.Add("Network Policies", "network-policies",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.NetworkPolicy), objectStore))
+
+	children, err := neh.Generate(prefix, namespace, "")
 	if err != nil {
 		return nil, false, err
 	}
@@ -70,16 +76,17 @@ func discoAndLBEntries(ctx context.Context, prefix, namespace string, objectStor
 
 func configAndStorageEntries(ctx context.Context, prefix, namespace string, objectStore store.Store, _ bool) ([]navigation.Navigation, bool, error) {
 	neh := navigation.EntriesHelper{}
-	neh.Add("Config Maps", "config-maps", icon.OverviewConfigMap,
-		loading.IsObjectLoading(ctx, namespace, csConfigMaps, objectStore))
-	neh.Add("Persistent Volume Claims", "persistent-volume-claims", icon.OverviewPersistentVolumeClaim,
-		loading.IsObjectLoading(ctx, namespace, csPVCs, objectStore))
-	neh.Add("Secrets", "secrets", icon.OverviewSecret,
-		loading.IsObjectLoading(ctx, namespace, csSecrets, objectStore))
-	neh.Add("Service Accounts", "service-accounts", icon.OverviewServiceAccount,
-		loading.IsObjectLoading(ctx, namespace, csServiceAccounts, objectStore))
 
-	children, err := neh.Generate(prefix)
+	neh.Add("Config Maps", "config-maps",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.ConfigMap), objectStore))
+	neh.Add("Persistent Volume Claims", "persistent-volume-claims",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.PersistentVolumeClaim), objectStore))
+	neh.Add("Secrets", "secrets",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Secret), objectStore))
+	neh.Add("Service Accounts", "service-accounts",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.ServiceAccount), objectStore))
+
+	children, err := neh.Generate(prefix, namespace, "")
 	if err != nil {
 		return nil, false, err
 	}
@@ -90,12 +97,12 @@ func configAndStorageEntries(ctx context.Context, prefix, namespace string, obje
 func rbacEntries(ctx context.Context, prefix, namespace string, objectStore store.Store, _ bool) ([]navigation.Navigation, bool, error) {
 	neh := navigation.EntriesHelper{}
 
-	neh.Add("Roles", "roles", icon.OverviewRole,
-		loading.IsObjectLoading(ctx, namespace, rbacRoles, objectStore))
-	neh.Add("Role Bindings", "role-bindings", icon.OverviewRoleBinding,
-		loading.IsObjectLoading(ctx, namespace, rbacRoleBindings, objectStore))
+	neh.Add("Roles", "roles",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.Role), objectStore))
+	neh.Add("Role Bindings", "role-bindings",
+		loading.IsObjectLoading(ctx, namespace, store.KeyFromGroupVersionKind(gvk.RoleBinding), objectStore))
 
-	children, err := neh.Generate(prefix)
+	children, err := neh.Generate(prefix, namespace, "")
 	if err != nil {
 		return nil, false, err
 	}

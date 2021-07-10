@@ -1,0 +1,122 @@
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.app-logs {
+  display: flex;
+  flex-direction: column;
+
+  .log-actions {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    margin-bottom: 6px;
+  }
+  .clr-control-container {
+    input {
+      width: 180px;
+    }
+  }
+  .container-select {
+    margin-right: 16px;
+    select {
+      width: 180px;
+    }
+  }
+  .clr-select-wrapper {
+    margin-top: 1px;
+  }
+  .clr-filter {
+    display: flex;
+
+    &-input {
+    }
+    &-summary {
+      align-self: flex-end;
+      font-size: 11px;
+      line-height: 12px;
+      margin-bottom: 12px;
+    }
+    &-buttons {
+      margin-top: 14px;
+      margin-left: 6px;
+      min-width: 64px;
+    }
+    &-btn {
+      padding-left: 6px;
+      padding-right: 6px;
+      margin-right: 6px;
+      width: 24px;
+      height: 24px;
+      font-size: 14px;
+      line-height: 16px;
+    }
+  }
+  .log-actions {
+    .clr-form-control {
+      margin-top: 0px;
+    }
+  }
+  .log-options-group {
+    display: flex;
+    margin-left: auto;
+    align-self: flex-end;
+
+    .clr-control-label {
+      bottom: 2px;
+    }
+    .toggle-timestamp {
+      margin-right: 0px;
+    }
+    label {
+      min-width: 120px;
+    }
+  }
+  .container-logs {
+    flex-grow: 1;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+
+    .highlight {
+      color: #0079b8;
+    }
+    .highlight-selected {
+      background: #0079b8;
+      color: #e9ecef;
+    }
+    .container-content {
+      display: flex;
+      flex-direction: column-reverse;
+    }
+
+    &-bg {
+      padding: 4px 8px;
+      min-height: 20vh;
+      max-height: calc(100vh - 270px);
+      overflow-y: auto;
+    }
+
+    .container-log {
+      font-family: 'Consolas', 'Menlo', monospace;
+      font-size: 12px;
+      display: flex;
+      flex-direction: row;
+
+      &-name {
+        padding-right: 10px;
+      }
+
+      &-timestamp {
+        min-width: 234px;
+        width: 234px;
+      }
+
+      &-message {
+        flex: 1;
+        word-wrap: break-word;
+        min-width: 100px;
+        font-weight: bold;
+      }
+    }
+  }
+}

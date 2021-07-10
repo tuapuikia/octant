@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,17 +7,19 @@ package overview
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/api"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/mime"
-	"github.com/vmware/octant/internal/portforward"
+	"github.com/vmware-tanzu/octant/internal/util/json"
+
+	"github.com/vmware-tanzu/octant/internal/api"
+	internalLog "github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/mime"
+	"github.com/vmware-tanzu/octant/internal/portforward"
+	"github.com/vmware-tanzu/octant/pkg/log"
 )
 
 type portForwardCreateRequest struct {
@@ -69,7 +71,7 @@ func createPortForward(ctx context.Context, body io.Reader, pfs portforward.Port
 	if pfs == nil {
 		return errors.New("port forward service is nil")
 	}
-	logger := log.From(ctx)
+	logger := internalLog.From(ctx)
 
 	req := portForwardCreateRequest{}
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
@@ -84,7 +86,7 @@ func createPortForward(ctx context.Context, body io.Reader, pfs portforward.Port
 		}
 	}
 
-	resp, err := pfs.Create(ctx, req.gvk(), req.Name, req.Namespace, req.Port)
+	resp, err := pfs.Create(ctx, nil, req.gvk(), req.Name, req.Namespace, req.Port)
 	if err != nil {
 		return &portForwardError{
 			code:     http.StatusInternalServerError,

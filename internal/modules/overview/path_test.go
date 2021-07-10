@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -14,10 +14,10 @@ import (
 )
 
 func Test_crdPath(t *testing.T) {
-	got, err := crdPath("default", "crdName", "name")
+	got, err := crdPath("default", "crdName", "version", "name")
 	require.NoError(t, err)
 
-	expected := path.Join("/content", "overview", "namespace", "default", "custom-resources", "crdName", "name")
+	expected := path.Join("/overview", "namespace", "default", "custom-resources", "crdName", "version", "name")
 	assert.Equal(t, expected, got)
 }
 
@@ -37,7 +37,7 @@ func Test_gvk_path(t *testing.T) {
 			apiVersion: "v1",
 			kind:       "Pod",
 			objectName: "pod",
-			expected:   path.Join("/content", "overview", "namespace", "default", "workloads", "pods", "pod"),
+			expected:   path.Join("/overview", "namespace", "default", "workloads", "pods", "pod"),
 		},
 		{
 			name:       "no namespace",

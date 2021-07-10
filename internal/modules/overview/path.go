@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,11 +7,14 @@ package overview
 
 import (
 	"path"
+	"strings"
+
+	"github.com/vmware-tanzu/octant/internal/util/path_util"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/gvk"
 )
 
 var (
@@ -25,8 +28,10 @@ var (
 		gvk.Pod,
 		gvk.ReplicationController,
 		gvk.StatefulSet,
+		gvk.HorizontalPodAutoscaler,
 		gvk.Ingress,
 		gvk.Service,
+		gvk.NetworkPolicy,
 		gvk.ConfigMap,
 		gvk.Secret,
 		gvk.PersistentVolumeClaim,
@@ -37,12 +42,12 @@ var (
 	}
 )
 
-func crdPath(namespace, crdName, name string) (string, error) {
+func crdPath(namespace, crdName, version, name string) (string, error) {
 	if namespace == "" {
 		return "", errors.Errorf("unable to create CRD path for %s due to missing namespace", crdName)
 	}
 
-	return path.Join("/content/overview/namespace", namespace, "custom-resources", crdName, name), nil
+	return path_util.NamespacedPath("/overview", namespace, "custom-resources", crdName, version, name), nil
 }
 
 func gvkPath(namespace, apiVersion, kind, name string) (string, error) {
@@ -79,10 +84,14 @@ func gvkPath(namespace, apiVersion, kind, name string) (string, error) {
 		p = "/config-and-storage/persistent-volume-claims"
 	case apiVersion == "v1" && kind == "ServiceAccount":
 		p = "/config-and-storage/service-accounts"
-	case apiVersion == "extensions/v1beta1" && kind == "Ingress":
+	case (apiVersion == "autoscaling/v1" || apiVersion == "autoscaling/v2beta2") && kind == "HorizontalPodAutoscaler":
+		p = "/discovery-and-load-balancing/horizontal-pod-autoscalers"
+	case apiVersion == "networking.k8s.io/v1" && kind == "Ingress":
 		p = "/discovery-and-load-balancing/ingresses"
 	case apiVersion == "v1" && kind == "Service":
 		p = "/discovery-and-load-balancing/services"
+	case apiVersion == "networking.k8s.io/v1" && kind == "NetworkPolicy":
+		p = "/discovery-and-load-balancing/network-policies"
 	case apiVersion == "rbac.authorization.k8s.io/v1" && kind == "Role":
 		p = "/rbac/roles"
 	case apiVersion == "rbac.authorization.k8s.io/v1" && kind == "RoleBinding":
@@ -95,5 +104,52 @@ func gvkPath(namespace, apiVersion, kind, name string) (string, error) {
 		return "", errors.Errorf("unknown object %s %s", apiVersion, kind)
 	}
 
-	return path.Join("/content/overview/namespace", namespace, p, name), nil
+	return path.Join("/overview/namespace", namespace, p, name), nil
+}
+
+func gvkReversePath(contentPath, namespace string) (schema.GroupVersionKind, error) {
+	reducedPath := strings.Replace(contentPath, path.Join("overview/namespace", namespace), "", 1)
+
+	switch {
+	case reducedPath == "/workloads/daemon-sets":
+		return gvk.DaemonSet, nil
+	case reducedPath == "/workloads/replica-sets":
+		return gvk.AppReplicaSet, nil
+	case reducedPath == "/workloads/stateful-sets":
+		return gvk.StatefulSet, nil
+	case reducedPath == "/workloads/deployments":
+		return gvk.Deployment, nil
+	case reducedPath == "/workloads/cron-jobs":
+		return gvk.CronJob, nil
+	case reducedPath == "/workloads/jobs":
+		return gvk.Job, nil
+	case reducedPath == "/workloads/replication-controllers":
+		return gvk.ReplicationController, nil
+	case reducedPath == "/config-and-storage/secrets":
+		return gvk.Secret, nil
+	case reducedPath == "/config-and-storage/config-maps":
+		return gvk.ConfigMap, nil
+	case reducedPath == "/config-and-storage/persistent-volume-claims":
+		return gvk.PersistentVolumeClaim, nil
+	case reducedPath == "/config-and-storage/service-accounts":
+		return gvk.ServiceAccount, nil
+	case reducedPath == "/discovery-and-load-balancing/horizontal-pod-autoscalers":
+		return gvk.HorizontalPodAutoscaler, nil
+	case reducedPath == "/discovery-and-load-balancing/ingresses":
+		return gvk.Ingress, nil
+	case reducedPath == "/discovery-and-load-balancing/services":
+		return gvk.Service, nil
+	case reducedPath == "/discovery-and-load-balancing/network-policies":
+		return gvk.NetworkPolicy, nil
+	case reducedPath == "/rbac/roles":
+		return gvk.Role, nil
+	case reducedPath == "/rbac/role-bindings":
+		return gvk.RoleBinding, nil
+	case reducedPath == "/events":
+		return gvk.Event, nil
+	case reducedPath == "/workloads/pods":
+		return gvk.Pod, nil
+	default:
+		return schema.GroupVersionKind{}, errors.Errorf("unknown gvk %s", contentPath)
+	}
 }

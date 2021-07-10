@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,37 +7,48 @@ package module
 
 import (
 	"context"
+	"strings"
+	"sync"
+
+	"github.com/vmware-tanzu/octant/pkg/navigation"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/cluster"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/internal/cluster"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/log"
 )
 
-//go:generate mockgen -destination=./fake/mock_manager.go -package=fake github.com/vmware/octant/internal/module ManagerInterface
-//go:generate mockgen -destination=./fake/mock_action_registrar.go -package=fake github.com/vmware/octant/internal/module ActionRegistrar
+//go:generate mockgen -destination=./fake/mock_manager.go -package=fake github.com/vmware-tanzu/octant/internal/module ManagerInterface
+//go:generate mockgen -destination=./fake/mock_action_registrar.go -package=fake github.com/vmware-tanzu/octant/internal/module ActionRegistrar
 
 type ActionReceiver interface {
 	ActionPaths() map[string]action.DispatcherFunc
 }
 
 type ActionRegistrar interface {
-	Register(actionPath string, actionFunc action.DispatcherFunc) error
+	Register(actionPath, pluginPath string, actionFunc action.DispatcherFunc) error
+	Unregister(actionPath, pluginPath string)
 }
 
 // ManagerInterface is an interface for managing module lifecycle.
 type ManagerInterface interface {
 	Modules() []Module
 	Register(mod Module) error
+	Unregister(mod Module)
 	SetNamespace(namespace string)
 	GetNamespace() string
+	Navigation(ctx context.Context, namespace, contextName string) ([]navigation.Navigation, error)
 	UpdateContext(ctx context.Context, contextName string) error
 
+	ModuleForContentPath(contentPath string) (Module, bool)
+
+	ClientRequestHandlers() []octant.ClientRequestHandler
+
 	ObjectPath(namespace, apiVersion, kind, name string) (string, error)
-	RegisterObjectPath(Module, schema.GroupVersionKind)
-	DeregisterObjectPath(schema.GroupVersionKind)
+	GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error)
 }
 
 // Manager manages module lifecycle.
@@ -50,6 +61,7 @@ type Manager struct {
 	registeredModules []Module
 
 	loadedModules []Module
+	mu            sync.Mutex
 }
 
 var _ ManagerInterface = (*Manager)(nil)
@@ -73,7 +85,7 @@ func (m *Manager) Register(mod Module) error {
 	if receiver, ok := mod.(ActionReceiver); ok {
 		for actionPath, actionFunc := range receiver.ActionPaths() {
 			m.logger.With("actionPath", actionPath, "module-name", mod.Name()).Infof("registering action")
-			if err := m.actionRegistrar.Register(actionPath, actionFunc); err != nil {
+			if err := m.actionRegistrar.Register(actionPath, mod.Name(), actionFunc); err != nil {
 				return err
 			}
 		}
@@ -86,6 +98,34 @@ func (m *Manager) Register(mod Module) error {
 	m.loadedModules = append(m.loadedModules, mod)
 
 	return nil
+}
+
+// Register register a module with the manager.
+func (m *Manager) Unregister(mod Module) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var delIdx int
+	var found bool
+
+	for i := 0; i < len(m.loadedModules); i++ {
+		if m.loadedModules[i].Name() == mod.Name() {
+			delIdx = i
+			found = true
+			break
+		}
+	}
+
+	if found {
+		m.loadedModules[delIdx].Stop()
+		m.loadedModules = append(m.loadedModules[:delIdx], m.loadedModules[delIdx+1:]...)
+		for i := 0; i < len(m.registeredModules); i++ {
+			if m.registeredModules[i].Name() == mod.Name() {
+				delIdx = i
+			}
+		}
+		m.registeredModules = append(m.registeredModules[:delIdx], m.registeredModules[delIdx+1:]...)
+	}
 }
 
 // Modules returns a list of modules.
@@ -114,6 +154,15 @@ func (m *Manager) SetNamespace(namespace string) {
 // GetNamespace gets the current namespace.
 func (m *Manager) GetNamespace() string {
 	return m.namespace
+}
+
+func (m *Manager) Navigation(ctx context.Context, namespace, contextName string) ([]navigation.Navigation, error) {
+	for _, module := range m.loadedModules {
+		if module.Name() == contextName {
+			return module.Navigation(ctx, namespace, contextName)
+		}
+	}
+	return nil, errors.New("module not found")
 }
 
 func (m *Manager) UpdateContext(ctx context.Context, contextName string) error {
@@ -148,16 +197,38 @@ func (m *Manager) ObjectPath(namespace, apiVersion, kind, name string) (string, 
 	owner, ok := objectPaths[gvk]
 	if !ok {
 		return "", nil
-		// return "", errors.Errorf("no module claimed ownership of %s", gvk.String())
 	}
 
 	return owner.GroupVersionKindPath(namespace, apiVersion, kind, name)
 }
 
-func (m *Manager) RegisterObjectPath(mod Module, gvk schema.GroupVersionKind) {
-	//m.objectPaths[gvk] = mod
+func (m *Manager) ModuleForContentPath(contentPath string) (Module, bool) {
+	for _, m := range m.Modules() {
+		if strings.HasPrefix(contentPath, m.ContentPath()) {
+			return m, true
+		}
+	}
+
+	return nil, false
 }
 
-func (m *Manager) DeregisterObjectPath(gvk schema.GroupVersionKind) {
-	//delete(m.objectPaths, gvk)
+func (m *Manager) GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error) {
+	for _, m := range m.Modules() {
+		if strings.HasPrefix(contentPath, m.ContentPath()) {
+			return m.GvkFromPath(contentPath, namespace)
+		}
+	}
+
+	return schema.GroupVersionKind{}, errors.Errorf("can't get GVK from path %s", contentPath)
+}
+
+// ClientRequestHandlers returns client request handlers for all modules.
+func (m *Manager) ClientRequestHandlers() []octant.ClientRequestHandler {
+	var list []octant.ClientRequestHandler
+
+	for _, m := range m.loadedModules {
+		list = append(list, m.ClientRequestHandlers()...)
+	}
+
+	return list
 }

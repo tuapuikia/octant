@@ -1,0 +1,178 @@
+name: preflight-checks
+on:
+  push:
+    tags:
+    - 'v*'
+    branches:
+    - master
+    - release-*
+  pull_request:
+    branches:
+    - master
+    - release-*
+
+jobs:
+  go_unit_tests:
+    strategy:
+      matrix:
+        go-version:
+          - 1.16.x
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    name: Golang tests on ${{ matrix.platform }}
+    steps:
+      - uses: actions/setup-node@v2.1.5
+        with:
+          node-version: '16'
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+      - uses: actions/checkout@v2
+      - name: install_prettier
+        run: |
+          npm i -g prettier
+      - name: run_go_tests
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go test
+
+  verify_tag:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v2
+        with:
+          go-version: 1.16.x
+      - uses: actions/checkout@v2
+      - name: Get tag
+        run: echo "GITHUB_TAG=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+      - name: Verify tag
+        run: |
+          bash ./ci/github-actions-tag-check.sh
+        shell: bash
+
+  node_unit_tests:
+    strategy:
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    name: Karma tests on ${{ matrix.platform }}
+    steps:
+      - uses: actions/setup-node@v2.1.5
+        with:
+          node-version: '16'
+      - uses: actions/checkout@v2
+      - name: run_karma
+        run: |
+          go run build.go web-test
+
+  bundle_assets:
+    needs: [go_unit_tests, node_unit_tests]
+    strategy:
+      matrix:
+        go-version:
+          - 1.16.x
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    name: Build on ${{ matrix.platform }}
+    steps:
+      - uses: actions/setup-node@v2.1.5
+        with:
+          node-version: '16'
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+      - uses: actions/checkout@v2
+      - name: Build web assets
+        run: |
+          go run build.go web-build
+      - uses: actions/upload-artifact@v2
+        with:
+          name: bundle
+          path: web/dist
+      - name: Go tools
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go go-install
+          go generate ./web
+          go generate ./pkg/plugin/plugin.go
+      - name: Build binary
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go build
+          ./build/octant version
+      - if: startsWith(github.ref, 'refs/tags/v')
+        name: Build electron binary
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go build-electron
+      - if: startsWith(github.ref, 'refs/tags/v')
+        name: Build electron
+        uses: samuelmeuli/action-electron-builder@v1.6.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          package_root: 'web'
+          build_script_name: 'build-electron'
+      - uses: actions/upload-artifact@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: electron-artifacts
+          path: web/release/Octant*
+
+  goreleaser:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [bundle_assets, verify_tag]
+    runs-on: ubuntu-latest
+    container: goreleaser/goreleaser:v0.161.0
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v2
+        with:
+          name: bundle
+          path: web/dist
+      - name: Run GoReleaser
+        run: |
+          goreleaser --skip-publish
+      - uses: actions/upload-artifact@v2
+        with:
+          name: binary-artifacts
+          path: dist
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [goreleaser, bundle_assets]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/download-artifact@v2
+        with:
+          name: binary-artifacts
+          path: dist
+      - uses: actions/download-artifact@v2
+        with:
+          name: electron-artifacts
+          path: web/release
+      - name: Create release
+        # actions/upload-release-asset@v1 does not support glob
+        run: |
+          set -x
+          assets=()
+          for asset in ./dist/*; do
+            if [[ $asset == *.txt ]] || [[ $asset == *.tar.gz ]] || [[ $asset == *.rpm ]] || [[ $asset == *.deb ]] || [[ $asset == *.zip ]]
+              then
+                assets+=("-a" "$asset")
+            fi
+          done
+          for asset in ./web/release/Octant*; do
+            shasum -a 256 "$asset" | awk '{sub(/.*\//," ",$2)} 1' >> ./dist/checksums.txt
+            assets+=("-a" "$asset")
+          done
+          hub release create "${assets[@]}" -m "${GITHUB_REF:10}" "${GITHUB_REF:10}" --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

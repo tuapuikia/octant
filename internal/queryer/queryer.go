@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,20 +7,23 @@ package queryer
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
 	"go.opencensus.io/trace"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
-	extv1beta1 "k8s.io/api/extensions/v1beta1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	apiErrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kLabels "k8s.io/apimachinery/pkg/labels"
@@ -28,29 +31,34 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/kubernetes/pkg/apis/apps"
-	"k8s.io/kubernetes/pkg/apis/batch"
-	"k8s.io/kubernetes/pkg/apis/core"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 
-	"github.com/vmware/octant/internal/gvk"
-	dashstrings "github.com/vmware/octant/internal/util/strings"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/util/kubernetes"
+	dashstrings "github.com/vmware-tanzu/octant/internal/util/strings"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
-//go:generate mockgen -source=queryer.go -destination=./fake/mock_queryer.go -package=fake github.com/vmware/octant/internal/queryer Queryer
-//go:generate mockgen -source=../../vendor/k8s.io/client-go/discovery/discovery_client.go -imports=openapi_v2=github.com/googleapis/gnostic/OpenAPIv2 -destination=./fake/mock_discovery.go -package=fake k8s.io/client-go/discovery DiscoveryInterface
+//go:generate mockgen -destination=./fake/mock_queryer.go -package=fake github.com/vmware-tanzu/octant/internal/queryer Queryer
+//go:generate mockgen -destination=./fake/mock_discovery.go -package=fake k8s.io/client-go/discovery DiscoveryInterface
 
 type Queryer interface {
 	Children(ctx context.Context, object *unstructured.Unstructured) (*unstructured.UnstructuredList, error)
 	Events(ctx context.Context, object metav1.Object) ([]*corev1.Event, error)
-	IngressesForService(ctx context.Context, service *corev1.Service) ([]*extv1beta1.Ingress, error)
-	OwnerReference(ctx context.Context, object *unstructured.Unstructured) (bool, *unstructured.Unstructured, error)
+	IngressesForService(ctx context.Context, service *corev1.Service) ([]*networkingv1.Ingress, error)
+	APIServicesForService(ctx context.Context, service *corev1.Service) ([]*apiregistrationv1.APIService, error)
+	MutatingWebhookConfigurationsForService(ctx context.Context, service *corev1.Service) ([]*admissionregistrationv1.MutatingWebhookConfiguration, error)
+	ValidatingWebhookConfigurationsForService(ctx context.Context, service *corev1.Service) ([]*admissionregistrationv1.ValidatingWebhookConfiguration, error)
+	OwnerReference(ctx context.Context, object *unstructured.Unstructured) (bool, []*unstructured.Unstructured, error)
+	ScaleTarget(ctx context.Context, hpa *autoscalingv1.HorizontalPodAutoscaler) (map[string]interface{}, error)
 	PodsForService(ctx context.Context, service *corev1.Service) ([]*corev1.Pod, error)
-	ServicesForIngress(ctx context.Context, ingress *extv1beta1.Ingress) ([]*corev1.Service, error)
+	ServicesForIngress(ctx context.Context, ingress *networkingv1.Ingress) (*unstructured.UnstructuredList, error)
 	ServicesForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.Service, error)
 	ServiceAccountForPod(ctx context.Context, pod *corev1.Pod) (*corev1.ServiceAccount, error)
+	ConfigMapsForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.ConfigMap, error)
+	SecretsForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.Secret, error)
+	PersistentVolumeClaimsForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.PersistentVolumeClaim, error)
 }
 
 type childrenCache struct {
@@ -204,8 +212,8 @@ func (osq *ObjectStoreQueryer) Children(ctx context.Context, owner *unstructured
 	}
 
 	resourceLists, err := osq.discoveryClient.ServerPreferredResources()
-	if err != nil {
-		return nil, err
+	if err != nil && !osq.IsMetricsDiscoveryErr(err) {
+		return nil, fmt.Errorf("objectStoreQueryer children: %w", err)
 	}
 
 	var g errgroup.Group
@@ -289,6 +297,7 @@ func (osq *ObjectStoreQueryer) Children(ctx context.Context, owner *unstructured
 }
 
 var allowed = []schema.GroupVersionKind{
+	gvk.AppReplicaSet,
 	gvk.CronJob,
 	gvk.DaemonSet,
 	gvk.Deployment,
@@ -297,12 +306,19 @@ var allowed = []schema.GroupVersionKind{
 	gvk.ExtReplicaSet,
 	gvk.ReplicationController,
 	gvk.StatefulSet,
+	gvk.HorizontalPodAutoscaler,
 	gvk.Ingress,
 	gvk.Service,
+	gvk.NetworkPolicy,
 	gvk.ConfigMap,
 	gvk.PersistentVolumeClaim,
 	gvk.Secret,
 	gvk.ServiceAccount,
+}
+
+func (osq *ObjectStoreQueryer) IsMetricsDiscoveryErr(err error) bool {
+	//TODO: determine the best way to handle these types of errors for all resources, not just metrics.
+	return discovery.IsGroupDiscoveryFailedError(err) && strings.Contains(err.Error(), "metrics")
 }
 
 func (osq *ObjectStoreQueryer) canList(apiResource metav1.APIResource) bool {
@@ -336,7 +352,7 @@ func (osq *ObjectStoreQueryer) Events(ctx context.Context, object metav1.Object)
 	var events []*corev1.Event
 	for _, unstructuredEvent := range allEvents.Items {
 		event := &corev1.Event{}
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredEvent.Object, event)
+		err := kubernetes.FromUnstructured(&unstructuredEvent, event)
 		if err != nil {
 			return nil, err
 		}
@@ -353,14 +369,14 @@ func (osq *ObjectStoreQueryer) Events(ctx context.Context, object metav1.Object)
 	return events, nil
 }
 
-func (osq *ObjectStoreQueryer) IngressesForService(ctx context.Context, service *corev1.Service) ([]*v1beta1.Ingress, error) {
+func (osq *ObjectStoreQueryer) IngressesForService(ctx context.Context, service *corev1.Service) ([]*networkingv1.Ingress, error) {
 	if service == nil {
 		return nil, errors.New("nil service")
 	}
 
 	key := store.Key{
 		Namespace:  service.Namespace,
-		APIVersion: "extensions/v1beta1",
+		APIVersion: "networking.k8s.io/v1",
 		Kind:       "Ingress",
 	}
 	ul, _, err := osq.objectStore.List(ctx, key)
@@ -368,16 +384,13 @@ func (osq *ObjectStoreQueryer) IngressesForService(ctx context.Context, service 
 		return nil, errors.Wrap(err, "retrieving ingresses")
 	}
 
-	var results []*v1beta1.Ingress
+	var results []*networkingv1.Ingress
 
 	for i := range ul.Items {
-		ingress := &v1beta1.Ingress{}
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(ul.Items[i].Object, ingress)
+		ingress := &networkingv1.Ingress{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], ingress)
 		if err != nil {
 			return nil, errors.Wrap(err, "converting unstructured ingress")
-		}
-		if err = copyObjectMeta(ingress, &ul.Items[i]); err != nil {
-			return nil, errors.Wrap(err, "copying object metadata")
 		}
 		backends := osq.listIngressBackends(*ingress)
 		if !containsBackend(backends, service.Name) {
@@ -389,11 +402,11 @@ func (osq *ObjectStoreQueryer) IngressesForService(ctx context.Context, service 
 	return results, nil
 }
 
-func (osq *ObjectStoreQueryer) listIngressBackends(ingress v1beta1.Ingress) []extv1beta1.IngressBackend {
-	var backends []v1beta1.IngressBackend
+func (osq *ObjectStoreQueryer) listIngressBackends(ingress networkingv1.Ingress) []networkingv1.IngressBackend {
+	var backends []networkingv1.IngressBackend
 
-	if ingress.Spec.Backend != nil && ingress.Spec.Backend.ServiceName != "" {
-		backends = append(backends, *ingress.Spec.Backend)
+	if ingress.Spec.DefaultBackend != nil && ingress.Spec.DefaultBackend.Service.Name != "" {
+		backends = append(backends, *ingress.Spec.DefaultBackend)
 	}
 
 	for _, rule := range ingress.Spec.Rules {
@@ -401,7 +414,7 @@ func (osq *ObjectStoreQueryer) listIngressBackends(ingress v1beta1.Ingress) []ex
 			continue
 		}
 		for _, p := range rule.IngressRuleValue.HTTP.Paths {
-			if p.Backend.ServiceName == "" {
+			if p.Backend.Service.Name == "" {
 				continue
 			}
 			backends = append(backends, p.Backend)
@@ -411,7 +424,100 @@ func (osq *ObjectStoreQueryer) listIngressBackends(ingress v1beta1.Ingress) []ex
 	return backends
 }
 
-func (osq *ObjectStoreQueryer) OwnerReference(ctx context.Context, object *unstructured.Unstructured) (bool, *unstructured.Unstructured, error) {
+func (osq *ObjectStoreQueryer) APIServicesForService(ctx context.Context, service *corev1.Service) ([]*apiregistrationv1.APIService, error) {
+	if service == nil {
+		return nil, errors.New("nil service")
+	}
+
+	key := store.KeyFromGroupVersionKind(gvk.APIService)
+	ul, _, err := osq.objectStore.List(ctx, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "retrieving apiservices")
+	}
+
+	var results []*apiregistrationv1.APIService
+
+	for i := range ul.Items {
+		apiservice := &apiregistrationv1.APIService{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], apiservice)
+		if err != nil {
+			return nil, errors.Wrap(err, "converting unstructured apiservice")
+		}
+		if apiservice.Spec.Service != nil &&
+			apiservice.Spec.Service.Namespace == service.Namespace &&
+			apiservice.Spec.Service.Name == service.Name {
+			results = append(results, apiservice)
+		}
+	}
+
+	return results, nil
+}
+
+func (osq *ObjectStoreQueryer) MutatingWebhookConfigurationsForService(ctx context.Context, service *corev1.Service) ([]*admissionregistrationv1.MutatingWebhookConfiguration, error) {
+	if service == nil {
+		return nil, errors.New("nil service")
+	}
+
+	key := store.KeyFromGroupVersionKind(gvk.MutatingWebhookConfiguration)
+	ul, _, err := osq.objectStore.List(ctx, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "retrieving mutatingwebhookconfigurations")
+	}
+
+	var results []*admissionregistrationv1.MutatingWebhookConfiguration
+
+	for i := range ul.Items {
+		mutatingwebhookconfiguration := &admissionregistrationv1.MutatingWebhookConfiguration{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], mutatingwebhookconfiguration)
+		if err != nil {
+			return nil, errors.Wrap(err, "converting unstructured mutatingwebhookconfiguration")
+		}
+		for _, mutatingwebhook := range mutatingwebhookconfiguration.Webhooks {
+			if mutatingwebhook.ClientConfig.Service != nil &&
+				mutatingwebhook.ClientConfig.Service.Namespace == service.Namespace &&
+				mutatingwebhook.ClientConfig.Service.Name == service.Name {
+				results = append(results, mutatingwebhookconfiguration)
+				break
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func (osq *ObjectStoreQueryer) ValidatingWebhookConfigurationsForService(ctx context.Context, service *corev1.Service) ([]*admissionregistrationv1.ValidatingWebhookConfiguration, error) {
+	if service == nil {
+		return nil, errors.New("nil service")
+	}
+
+	key := store.KeyFromGroupVersionKind(gvk.ValidatingWebhookConfiguration)
+	ul, _, err := osq.objectStore.List(ctx, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "retrieving validatingwebhookconfigurations")
+	}
+
+	var results []*admissionregistrationv1.ValidatingWebhookConfiguration
+
+	for i := range ul.Items {
+		validatingwebhookconfiguration := &admissionregistrationv1.ValidatingWebhookConfiguration{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], validatingwebhookconfiguration)
+		if err != nil {
+			return nil, errors.Wrap(err, "converting unstructured validatingwebhookconfiguration")
+		}
+		for _, validatingwebhook := range validatingwebhookconfiguration.Webhooks {
+			if validatingwebhook.ClientConfig.Service != nil &&
+				validatingwebhook.ClientConfig.Service.Namespace == service.Namespace &&
+				validatingwebhook.ClientConfig.Service.Name == service.Name {
+				results = append(results, validatingwebhookconfiguration)
+				break
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func (osq *ObjectStoreQueryer) OwnerReference(ctx context.Context, object *unstructured.Unstructured) (bool, []*unstructured.Unstructured, error) {
 	if object == nil {
 		return false, nil, errors.New("can't find owner for nil object")
 	}
@@ -420,58 +526,139 @@ func (osq *ObjectStoreQueryer) OwnerReference(ctx context.Context, object *unstr
 	switch len(ownerReferences) {
 	case 0:
 		return false, nil, nil
-	case 1:
-		ownerReference := ownerReferences[0]
-
-		resourceList, err := osq.discoveryClient.ServerResourcesForGroupVersion(ownerReference.APIVersion)
-		if err != nil {
-			return false, nil, err
-		}
-		if resourceList == nil {
-			return false, nil, errors.Errorf("did not expect resource list for %s to be nil", ownerReference.APIVersion)
-		}
+	default:
+		var list []*unstructured.Unstructured
 
 		found := false
-		isNamespaced := false
-		for _, apiResource := range resourceList.APIResources {
-			if apiResource.Kind == ownerReference.Kind {
-				isNamespaced = apiResource.Namespaced
+
+		for _, ownerReference := range ownerReferences {
+			objectFound, object, err := osq.handle(ctx, object, ownerReference)
+			if err != nil {
+				return false, nil, err
+			}
+
+			list = append(list, object)
+			if objectFound {
 				found = true
 			}
 		}
 
-		if !found {
-			return false, nil, errors.Errorf("unable to find owner references %v", ownerReference)
-		}
-
-		namespace := ""
-		if isNamespaced {
-			namespace = object.GetNamespace()
-		}
-
-		key := store.Key{
-			Namespace:  namespace,
-			APIVersion: ownerReference.APIVersion,
-			Kind:       ownerReference.Kind,
-			Name:       ownerReference.Name,
-		}
-
-		object, ok := osq.owner.get(key)
-		if ok {
-			return true, object, nil
-		}
-
-		owner, err := osq.objectStore.Get(ctx, key)
-		if err != nil {
-			return false, nil, errors.Wrap(err, "get owner from store")
-		}
-
-		osq.owner.set(key, owner)
-
-		return true, owner, nil
-	default:
-		return false, nil, errors.New("unable to handle more than one owner reference")
+		return found, list, nil
 	}
+}
+
+func (osq *ObjectStoreQueryer) handle(
+	ctx context.Context,
+	object *unstructured.Unstructured,
+	ownerReference metav1.OwnerReference) (bool, *unstructured.Unstructured, error) {
+	resourceList, err := osq.discoveryClient.ServerResourcesForGroupVersion(ownerReference.APIVersion)
+	if err != nil && !osq.IsMetricsDiscoveryErr(err) {
+		return false, nil, fmt.Errorf("objectStoreQueryer handle: %w", err)
+	}
+	if resourceList == nil {
+		return false, nil, errors.Errorf("did not expect resource list for %s to be nil", ownerReference.APIVersion)
+	}
+
+	found := false
+	isNamespaced := false
+	for _, apiResource := range resourceList.APIResources {
+		if apiResource.Kind == ownerReference.Kind {
+			isNamespaced = apiResource.Namespaced
+			found = true
+		}
+	}
+
+	if !found {
+		return false, nil, errors.Errorf("unable to find owner references %v", ownerReference)
+	}
+
+	namespace := ""
+	if isNamespaced {
+		namespace = object.GetNamespace()
+	}
+
+	key := store.Key{
+		Namespace:  namespace,
+		APIVersion: ownerReference.APIVersion,
+		Kind:       ownerReference.Kind,
+		Name:       ownerReference.Name,
+	}
+
+	object, ok := osq.owner.get(key)
+	if ok {
+		return true, object, nil
+	}
+
+	owner, err := osq.objectStore.Get(ctx, key)
+	if err != nil {
+		return false, nil, errors.Wrap(err, "get owner from store")
+	}
+
+	if owner == nil {
+		return false, nil, errors.Errorf("owner %s not found", key)
+	}
+
+	osq.owner.set(key, owner)
+
+	return true, owner, nil
+}
+
+func (osq *ObjectStoreQueryer) ScaleTarget(ctx context.Context, hpa *autoscalingv1.HorizontalPodAutoscaler) (map[string]interface{}, error) {
+	if hpa == nil {
+		return nil, errors.New("can't find scale target for nil hpa")
+	}
+
+	key := store.Key{
+		Namespace:  hpa.Namespace,
+		APIVersion: hpa.Spec.ScaleTargetRef.APIVersion,
+		Kind:       hpa.Spec.ScaleTargetRef.Kind,
+		Name:       hpa.Spec.ScaleTargetRef.Name,
+	}
+
+	u, err := osq.objectStore.Get(ctx, key)
+	if err != nil {
+		return nil, errors.WithMessagef(err, "retrieve scale target %q from namespace %q", key.Name, key.Namespace)
+	}
+
+	if u != nil {
+		switch key.Kind {
+		case "Deployment":
+			deployment := &appsv1.Deployment{}
+			if err := kubernetes.FromUnstructured(u, deployment); err != nil {
+				return nil, errors.WithMessage(err, "converting unstructured object to deployment")
+			}
+
+			object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(deployment)
+			if err != nil {
+				return nil, err
+			}
+			return object, nil
+		case "ReplicaSet":
+			replicaSet := &appsv1.ReplicaSet{}
+			if err := kubernetes.FromUnstructured(u, replicaSet); err != nil {
+				return nil, errors.WithMessage(err, "converting unstructured object to replica set")
+			}
+
+			object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(replicaSet)
+			if err != nil {
+				return nil, err
+			}
+			return object, nil
+		case "ReplicationController":
+			replicationController := &corev1.ReplicationController{}
+			if err := kubernetes.FromUnstructured(u, replicationController); err != nil {
+				return nil, errors.WithMessage(err, "converting unstructured object to replication controller")
+			}
+
+			object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(replicationController)
+			if err != nil {
+				return nil, err
+			}
+			return object, nil
+		}
+	}
+
+	return nil, errors.Wrap(err, "invalid scale target")
 }
 
 func (osq *ObjectStoreQueryer) PodsForService(ctx context.Context, service *corev1.Service) ([]*corev1.Pod, error) {
@@ -514,11 +701,7 @@ func (osq *ObjectStoreQueryer) loadPods(ctx context.Context, key store.Key, labe
 
 	for i := range objects.Items {
 		pod := &corev1.Pod{}
-		if err := scheme.Scheme.Convert(&objects.Items[i], pod, runtime.InternalGroupVersioner); err != nil {
-			return nil, err
-		}
-
-		if err := copyObjectMeta(pod, &objects.Items[i]); err != nil {
+		if err := kubernetes.FromUnstructured(&objects.Items[i], pod); err != nil {
 			return nil, err
 		}
 
@@ -539,26 +722,22 @@ func (osq *ObjectStoreQueryer) loadPods(ctx context.Context, key store.Key, labe
 	return list, nil
 }
 
-func (osq *ObjectStoreQueryer) ServicesForIngress(ctx context.Context, ingress *extv1beta1.Ingress) ([]*corev1.Service, error) {
+func (osq *ObjectStoreQueryer) ServicesForIngress(ctx context.Context, ingress *networkingv1.Ingress) (*unstructured.UnstructuredList, error) {
 	if ingress == nil {
 		return nil, errors.New("ingress is nil")
 	}
 
 	backends := osq.listIngressBackends(*ingress)
-	var services []*corev1.Service
+	list := &unstructured.UnstructuredList{}
 	for _, backend := range backends {
 		key := store.Key{
 			Namespace:  ingress.Namespace,
 			APIVersion: "v1",
 			Kind:       "Service",
-			Name:       backend.ServiceName,
+			Name:       backend.Service.Name,
 		}
 		u, err := osq.objectStore.Get(ctx, key)
-		if err != nil {
-			realErr := errors.Cause(err)
-			if apiErrors.IsNotFound(realErr) {
-				continue
-			}
+		if err != nil && !kerrors.IsNotFound(err) {
 			return nil, errors.Wrapf(err, "retrieving service backend: %v", backend)
 		}
 
@@ -566,17 +745,9 @@ func (osq *ObjectStoreQueryer) ServicesForIngress(ctx context.Context, ingress *
 			continue
 		}
 
-		svc := &corev1.Service{}
-		err = runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, svc)
-		if err != nil {
-			return nil, errors.Wrap(err, "converting unstructured service")
-		}
-		if err := copyObjectMeta(svc, u); err != nil {
-			return nil, errors.Wrap(err, "copying object metadata")
-		}
-		services = append(services, svc)
+		list.Items = append(list.Items, *u)
 	}
-	return services, nil
+	return list, nil
 }
 
 func (osq *ObjectStoreQueryer) ServicesForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.Service, error) {
@@ -596,12 +767,9 @@ func (osq *ObjectStoreQueryer) ServicesForPod(ctx context.Context, pod *corev1.P
 	}
 	for i := range ul.Items {
 		svc := &corev1.Service{}
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(ul.Items[i].Object, svc)
+		err := kubernetes.FromUnstructured(&ul.Items[i], svc)
 		if err != nil {
 			return nil, errors.Wrap(err, "converting unstructured service")
-		}
-		if err = copyObjectMeta(svc, &ul.Items[i]); err != nil {
-			return nil, errors.Wrap(err, "copying object metadata")
 		}
 		labelSelector, err := osq.getSelector(svc)
 		if err != nil {
@@ -639,20 +807,162 @@ func (osq *ObjectStoreQueryer) ServiceAccountForPod(ctx context.Context, pod *co
 	u, err := osq.objectStore.Get(ctx, key)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "retrieve service account %q from namespace %q",
-			key.Namespace, key.Namespace)
+			key.Name, key.Namespace)
+	}
+
+	if u == nil {
+		return nil, errors.Errorf("service account %q from namespace %q does not exist",
+			key.Name, key.Namespace)
 	}
 
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, serviceAccount); err != nil {
+	if err := kubernetes.FromUnstructured(u, serviceAccount); err != nil {
 		return nil, errors.WithMessage(err, "converting unstructured object to service account")
-	}
-
-	if err = copyObjectMeta(serviceAccount, u); err != nil {
-		return nil, errors.Wrap(err, "copying object metadata")
 	}
 
 	return serviceAccount, nil
 
+}
+
+func (osq *ObjectStoreQueryer) ConfigMapsForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.ConfigMap, error) {
+	if pod == nil {
+		return nil, errors.New("pod is nil")
+	}
+
+	var configMaps []*corev1.ConfigMap
+	key := store.Key{
+		Namespace:  pod.Namespace,
+		APIVersion: "v1",
+		Kind:       "ConfigMap",
+	}
+	ul, _, err := osq.objectStore.List(ctx, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "retrieving configmaps")
+	}
+
+	for i := range ul.Items {
+		configMap := &corev1.ConfigMap{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], configMap)
+		if err != nil {
+			return nil, errors.Wrap(err, "converting unstructured configmap")
+		}
+
+		for _, v := range pod.Spec.Volumes {
+			if v.ConfigMap != nil && v.ConfigMap.Name == configMap.Name {
+				configMaps = append(configMaps, configMap)
+			}
+		}
+
+		for ci := range pod.Spec.Containers {
+			c := &pod.Spec.Containers[ci]
+			for _, e := range c.Env {
+				if e.ValueFrom != nil && e.ValueFrom.ConfigMapKeyRef != nil {
+					ref := e.ValueFrom.ConfigMapKeyRef
+					if ref.Name == configMap.Name {
+						configMaps = append(configMaps, configMap)
+					}
+				}
+			}
+
+			for _, e := range c.EnvFrom {
+				if e.ConfigMapRef != nil {
+					ref := e.ConfigMapRef
+					if ref.Name == configMap.Name {
+						configMaps = append(configMaps, configMap)
+					}
+				}
+			}
+		}
+	}
+
+	return configMaps, nil
+}
+
+func (osq *ObjectStoreQueryer) SecretsForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.Secret, error) {
+	if pod == nil {
+		return nil, errors.New("pod is nil")
+	}
+
+	var secrets []*corev1.Secret
+	key := store.Key{
+		Namespace:  pod.Namespace,
+		APIVersion: "v1",
+		Kind:       "Secret",
+	}
+	ul, _, err := osq.objectStore.List(ctx, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "retrieving secrets")
+	}
+
+	for i := range ul.Items {
+		secret := &corev1.Secret{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], secret)
+		if err != nil {
+			return nil, errors.Wrap(err, "converting unstructured secret")
+		}
+
+		for vi := range pod.Spec.Volumes {
+			v := &pod.Spec.Volumes[vi]
+			if v.Secret != nil && v.Secret.SecretName == secret.Name {
+				secrets = append(secrets, secret)
+			}
+		}
+		for ci := range pod.Spec.Containers {
+			c := &pod.Spec.Containers[ci]
+			for _, e := range c.Env {
+				if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+					ref := e.ValueFrom.SecretKeyRef
+					if ref.Name == secret.Name {
+						secrets = append(secrets, secret)
+					}
+				}
+			}
+
+			for _, e := range c.EnvFrom {
+				if e.SecretRef != nil {
+					ref := e.SecretRef
+					if ref.Name == secret.Name {
+						secrets = append(secrets, secret)
+					}
+				}
+			}
+		}
+	}
+
+	return secrets, nil
+}
+
+func (osq *ObjectStoreQueryer) PersistentVolumeClaimsForPod(ctx context.Context, pod *corev1.Pod) ([]*corev1.PersistentVolumeClaim, error) {
+	if pod == nil {
+		return nil, errors.New("pod is nil")
+	}
+
+	var persistentVolumeClaims []*corev1.PersistentVolumeClaim
+	key := store.Key{
+		Namespace:  pod.Namespace,
+		APIVersion: "v1",
+		Kind:       "PersistentVolumeClaim",
+	}
+	ul, _, err := osq.objectStore.List(ctx, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "retrieving persistentVolumeClaims")
+	}
+
+	for i := range ul.Items {
+		pvc := &corev1.PersistentVolumeClaim{}
+		err := kubernetes.FromUnstructured(&ul.Items[i], pvc)
+		if err != nil {
+			return nil, errors.Wrap(err, "converting unstructured persistentVolumeClaim")
+		}
+
+		for _, v := range pod.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == pvc.Name {
+				persistentVolumeClaims = append(persistentVolumeClaims, pvc)
+			}
+		}
+	}
+
+	return persistentVolumeClaims, nil
 }
 
 func (osq *ObjectStoreQueryer) getSelector(object runtime.Object) (*metav1.LabelSelector, error) {
@@ -679,62 +989,9 @@ func (osq *ObjectStoreQueryer) getSelector(object runtime.Object) (*metav1.Label
 			MatchLabels: t.Spec.Selector,
 		}
 		return selector, nil
-	case *apps.DaemonSet:
-		return t.Spec.Selector, nil
-	case *apps.StatefulSet:
-		return t.Spec.Selector, nil
-	case *batch.CronJob:
-		return nil, nil
-	case *core.ReplicationController:
-		selector := &metav1.LabelSelector{
-			MatchLabels: t.Spec.Selector,
-		}
-		return selector, nil
-	case *apps.ReplicaSet:
-		return t.Spec.Selector, nil
-	case *apps.Deployment:
-		return t.Spec.Selector, nil
-	case *core.Service:
-		selector := &metav1.LabelSelector{
-			MatchLabels: t.Spec.Selector,
-		}
-		return selector, nil
 	default:
 		return nil, errors.Errorf("unable to retrieve selector for type %T", object)
 	}
-}
-
-func copyObjectMeta(to interface{}, from *unstructured.Unstructured) error {
-	object, ok := to.(metav1.Object)
-	if !ok {
-		return errors.Errorf("%T is not an object", to)
-	}
-
-	t, err := meta.TypeAccessor(object)
-	if err != nil {
-		return errors.Wrapf(err, "accessing type meta")
-	}
-	t.SetAPIVersion(from.GetAPIVersion())
-	t.SetKind(from.GetObjectKind().GroupVersionKind().Kind)
-
-	object.SetNamespace(from.GetNamespace())
-	object.SetName(from.GetName())
-	object.SetGenerateName(from.GetGenerateName())
-	object.SetUID(from.GetUID())
-	object.SetResourceVersion(from.GetResourceVersion())
-	object.SetGeneration(from.GetGeneration())
-	object.SetSelfLink(from.GetSelfLink())
-	object.SetCreationTimestamp(from.GetCreationTimestamp())
-	object.SetDeletionTimestamp(from.GetDeletionTimestamp())
-	object.SetDeletionGracePeriodSeconds(from.GetDeletionGracePeriodSeconds())
-	object.SetLabels(from.GetLabels())
-	object.SetAnnotations(from.GetAnnotations())
-	object.SetInitializers(from.GetInitializers())
-	object.SetOwnerReferences(from.GetOwnerReferences())
-	object.SetClusterName(from.GetClusterName())
-	object.SetFinalizers(from.GetFinalizers())
-
-	return nil
 }
 
 // extraKeys are keys that should be ignored in labels. These keys are added
@@ -758,9 +1015,9 @@ func isEqualSelector(s1, s2 *metav1.LabelSelector) bool {
 	return apiequality.Semantic.DeepEqual(s1Copy, s2Copy)
 }
 
-func containsBackend(lst []v1beta1.IngressBackend, s string) bool {
+func containsBackend(lst []networkingv1.IngressBackend, s string) bool {
 	for _, item := range lst {
-		if item.ServiceName == s {
+		if item.Service.Name == s {
 			return true
 		}
 	}

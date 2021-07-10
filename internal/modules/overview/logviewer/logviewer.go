@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,7 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/util/kubernetes"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // ToComponent converts an object into a log viewer component.
@@ -24,7 +25,7 @@ func ToComponent(object runtime.Object) (component.Component, error) {
 
 	switch t := object.(type) {
 	case *unstructured.Unstructured:
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(t.Object, pod); err != nil {
+		if err := kubernetes.FromUnstructured(t, pod); err != nil {
 			return nil, err
 		}
 	case *corev1.Pod:
@@ -37,7 +38,7 @@ func ToComponent(object runtime.Object) (component.Component, error) {
 		return nil, errors.Errorf("can't fetch logs from a %T", object)
 	}
 
-	var containerNames []string
+	containerNames := []string{""}
 
 	for _, c := range pod.Spec.InitContainers {
 		containerNames = append(containerNames, c.Name)
@@ -47,7 +48,11 @@ func ToComponent(object runtime.Object) (component.Component, error) {
 		containerNames = append(containerNames, c.Name)
 	}
 
-	logsComponent := component.NewLogs(pod.Namespace, pod.Name, containerNames)
+	for _, c := range pod.Spec.EphemeralContainers {
+		containerNames = append(containerNames, c.Name)
+	}
+
+	logsComponent := component.NewLogs(pod.Namespace, pod.Name, containerNames...)
 
 	return logsComponent, nil
 }

@@ -1,38 +1,39 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package cluster
 
 import (
+	"context"
+
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+
+	clusterTypes "github.com/vmware-tanzu/octant/pkg/cluster"
 )
 
-//go:generate mockgen -source=namespace.go -destination=./fake/mock_namespace_interface.go -package=fake github.com/vmware/octant/internal/cluster NamespaceInterface
-
-// NamespaceInterface is an interface for querying namespace details.
-type NamespaceInterface interface {
-	Names() ([]string, error)
-	InitialNamespace() string
-}
-
 type namespaceClient struct {
-	dynamicClient    dynamic.Interface
-	initialNamespace string
+	restClient         rest.Interface
+	dynamicClient      dynamic.Interface
+	initialNamespace   string
+	providedNamespaces []string
 }
 
-var _ NamespaceInterface = (*namespaceClient)(nil)
+var _ clusterTypes.NamespaceInterface = (*namespaceClient)(nil)
 
-func newNamespaceClient(dynamicClient dynamic.Interface, initialNamespace string) *namespaceClient {
+func newNamespaceClient(dynamicClient dynamic.Interface, restClient rest.Interface, initialNamespace string, providedNamespaces []string) *namespaceClient {
 	return &namespaceClient{
-		dynamicClient:    dynamicClient,
-		initialNamespace: initialNamespace,
+		restClient:         restClient,
+		dynamicClient:      dynamicClient,
+		initialNamespace:   initialNamespace,
+		providedNamespaces: providedNamespaces,
 	}
 }
 
@@ -50,6 +51,15 @@ func (n *namespaceClient) Names() ([]string, error) {
 	return names, nil
 }
 
+func (n *namespaceClient) HasNamespace(namespace string) bool {
+	ns := &corev1.Namespace{}
+	err := n.restClient.Get().Resource("namespaces").Name(namespace).Do(context.TODO()).Into(ns)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
 // Namespaces returns available namespaces.
 func namespaces(dc dynamic.Interface) ([]corev1.Namespace, error) {
 	res := schema.GroupVersionResource{
@@ -59,7 +69,7 @@ func namespaces(dc dynamic.Interface) ([]corev1.Namespace, error) {
 
 	nri := dc.Resource(res)
 
-	list, err := nri.List(metav1.ListOptions{})
+	list, err := nri.List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "list namespaces")
 	}
@@ -73,6 +83,16 @@ func namespaces(dc dynamic.Interface) ([]corev1.Namespace, error) {
 	return nsList.Items, nil
 }
 
+// InitialNamespace returns the initial namespace for Octant
 func (n *namespaceClient) InitialNamespace() string {
 	return n.initialNamespace
+}
+
+// ProvidedNamespaces returns the list of namespaces provided.
+// If no namespaces  are provided, it will default to returning the InitialNamespace
+func (n *namespaceClient) ProvidedNamespaces() []string {
+	if len(n.providedNamespaces) == 0 {
+		n.providedNamespaces = []string{n.initialNamespace}
+	}
+	return n.providedNamespaces
 }

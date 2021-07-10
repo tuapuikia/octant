@@ -1,13 +1,14 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"sort"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 )
 
 // Selector identifies a Component as being a selector flavor.
@@ -45,15 +46,17 @@ func (t *SelectorsConfig) UnmarshalJSON(data []byte) error {
 }
 
 // Selectors contains other Components
+//
+// +octant:component
 type Selectors struct {
-	base
+	Base
 	Config SelectorsConfig `json:"config"`
 }
 
 // NewSelectors creates a selectors component
 func NewSelectors(selectors []Selector) *Selectors {
 	return &Selectors{
-		base: newBase(typeSelectors, nil),
+		Base: newBase(TypeSelectors, nil),
 		Config: SelectorsConfig{
 			Selectors: selectors,
 		},
@@ -81,7 +84,7 @@ func (t *Selectors) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	filtered.Metadata.Type = typeSelectors
+	filtered.Metadata.Type = TypeSelectors
 	filtered.Metadata.Title = t.Metadata.Title
 
 	m := selectorsMarshal(*filtered)

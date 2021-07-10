@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,10 +7,8 @@ package localcontent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -20,10 +18,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/internal/octant"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/util/json"
+
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 type LocalContent struct {
@@ -46,7 +46,15 @@ func (l *LocalContent) Name() string {
 	return "local"
 }
 
-func (l *LocalContent) Content(ctx context.Context, contentPath string, prefix string, namespace string, opts module.ContentOptions) (component.ContentResponse, error) {
+func (l *LocalContent) Description() string {
+	return "This is the local module description"
+}
+
+func (l *LocalContent) ClientRequestHandlers() []octant.ClientRequestHandler {
+	return nil
+}
+
+func (l *LocalContent) Content(ctx context.Context, contentPath string, opts module.ContentOptions) (component.ContentResponse, error) {
 	if contentPath == "/" || contentPath == "" {
 		return l.list()
 	}
@@ -68,7 +76,7 @@ func (l *LocalContent) list() (component.ContentResponse, error) {
 		}
 
 		table.Add(component.TableRow{
-			"Title": component.NewLink("", title, path.Join("/content/local", base)),
+			"Title": component.NewLink("", title, path.Join("/local", base)),
 			"File":  component.NewText(name),
 		})
 
@@ -89,7 +97,7 @@ func (l *LocalContent) list() (component.ContentResponse, error) {
 }
 
 func (l *LocalContent) ContentPath() string {
-	return fmt.Sprintf("/%s", l.Name())
+	return fmt.Sprintf("%s", l.Name())
 }
 
 func (l *LocalContent) content(name string) (component.ContentResponse, error) {
@@ -203,10 +211,6 @@ func (l *LocalContent) Start() error {
 func (l *LocalContent) Stop() {
 }
 
-func (l *LocalContent) Handlers(ctx context.Context) map[string]http.Handler {
-	return make(map[string]http.Handler)
-}
-
 func (l *LocalContent) SupportedGroupVersionKind() []schema.GroupVersionKind {
 	return []schema.GroupVersionKind{}
 }
@@ -216,11 +220,15 @@ func (l *LocalContent) GroupVersionKindPath(namespace, apiVersion, kind, name st
 }
 
 func (l *LocalContent) AddCRD(ctx context.Context, crd *unstructured.Unstructured) error {
-	return errors.Errorf("unable to add crd %s", crd.GetName())
+	return nil
 }
 
 func (l *LocalContent) RemoveCRD(ctx context.Context, crd *unstructured.Unstructured) error {
-	return errors.Errorf("unable to remove crd %s", crd.GetName())
+	return nil
+}
+
+func (l *LocalContent) ResetCRDs(ctx context.Context) error {
+	return nil
 }
 
 // Generators allow modules to send events to the frontend.
@@ -230,4 +238,8 @@ func (l *LocalContent) Generators() []octant.Generator {
 
 func (l *LocalContent) SetContext(ctx context.Context, contextName string) error {
 	return nil
+}
+
+func (l *LocalContent) GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error) {
+	return schema.GroupVersionKind{}, errors.Errorf("not supported")
 }

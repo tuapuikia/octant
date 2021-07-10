@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,47 +7,47 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path"
 	"strings"
+	"time"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/gorilla/mux"
-	"github.com/pkg/errors"
 
-	"github.com/vmware/octant/internal/cluster"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/mime"
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/pkg/navigation"
+	"github.com/spf13/viper"
+
+	"github.com/vmware-tanzu/octant/internal/config"
+	"github.com/vmware-tanzu/octant/internal/mime"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/pkg/api"
+	"github.com/vmware-tanzu/octant/pkg/log"
 )
 
-//go:generate mockgen -destination=./fake/mock_cluster_client.go -package=fake github.com/vmware/octant/internal/api ClusterClient
-//go:generate mockgen -destination=./fake/mock_service.go -package=fake github.com/vmware/octant/internal/api Service
+//go:generate mockgen -destination=./fake/mock_service.go -package=fake github.com/vmware-tanzu/octant/internal/api Service
 
 const (
 	// ListenerAddrKey is the environment variable for the Octant listener address.
-	ListenerAddrKey  = "OCTANT_LISTENER_ADDR"
-	AcceptedHostsKey = "OCTANT_ACCEPTED_HOSTS"
+	ListenerAddrKey  = "listener-addr"
+	AcceptedHostsKey = "accepted-hosts"
 	// PathPrefix is a string for the api path prefix.
 	PathPrefix          = "/api/v1"
 	defaultListenerAddr = "127.0.0.1:7777"
 )
 
-func acceptedHosts() []string {
+func AcceptedHosts() []string {
 	hosts := []string{
 		"localhost",
 		"127.0.0.1",
 	}
-	if customHosts := os.Getenv(AcceptedHostsKey); customHosts != "" {
+	if customHosts := viper.GetString(AcceptedHostsKey); customHosts != "" {
 		allowedHosts := strings.Split(customHosts, ",")
 		hosts = append(hosts, allowedHosts...)
 	}
 
-	listenerAddr := ListenerAddr()
+	listenerAddr := getListenerAddr()
 	host, _, err := net.SplitHostPort(listenerAddr)
 	if err != nil {
 		panic(fmt.Sprintf("Unable to parse OCTANT_LISTENER_ADDR: %s", listenerAddr))
@@ -57,26 +57,28 @@ func acceptedHosts() []string {
 	return hosts
 }
 
-// ListenerAddr returns the default listener address if OCTANT_LISTENER_ADDR is not set.
-func ListenerAddr() string {
+// Listener returns the default listener if OCTANT_LISTENER_ADDR is not set.
+func Listener() (net.Listener, error) {
+	listenerAddr := getListenerAddr()
+	conn, err := net.DialTimeout("tcp", listenerAddr, time.Millisecond*500)
+	if err != nil {
+		return net.Listen("tcp", listenerAddr)
+	}
+	_ = conn.Close()
+	return nil, fmt.Errorf("tcp %s: dial: already in use", listenerAddr)
+}
+
+func getListenerAddr() string {
 	listenerAddr := defaultListenerAddr
-	if customListenerAddr := os.Getenv(ListenerAddrKey); customListenerAddr != "" {
+	if customListenerAddr := viper.GetString(ListenerAddrKey); customListenerAddr != "" {
 		listenerAddr = customListenerAddr
 	}
 	return listenerAddr
 }
 
-func serveAsJSON(w http.ResponseWriter, v interface{}, logger log.Logger) {
-	w.Header().Set("Content-Type", mime.JSONContentType)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		logger.Errorf("encoding JSON response: %v", err)
-	}
-}
-
 // Service is an API service.
 type Service interface {
-	RegisterModule(module.Module) error
-	Handler(ctx context.Context) (*mux.Router, error)
+	Handler(ctx context.Context) (http.Handler, error)
 	ForceUpdate() error
 }
 
@@ -112,19 +114,15 @@ func RespondWithError(w http.ResponseWriter, code int, message string, logger lo
 	}
 }
 
-type ClusterClient interface {
-	NamespaceClient() (cluster.NamespaceInterface, error)
-	InfoClient() (cluster.InfoInterface, error)
-}
-
 // API is the API for the dashboard client
 type API struct {
 	ctx              context.Context
-	clusterClient    ClusterClient
 	moduleManager    module.ManagerInterface
-	actionDispatcher ActionDispatcher
+	actionDispatcher api.ActionDispatcher
 	prefix           string
+	dashConfig       config.Dash
 	logger           log.Logger
+	scManager        *api.StreamingConnectionManager
 
 	modulePaths   map[string]module.Module
 	modules       []module.Module
@@ -134,16 +132,17 @@ type API struct {
 var _ Service = (*API)(nil)
 
 // New creates an instance of API.
-func New(ctx context.Context, prefix string, clusterClient ClusterClient, moduleManager module.ManagerInterface, actionDispatcher ActionDispatcher, logger log.Logger) *API {
+func New(ctx context.Context, prefix string, actionDispatcher api.ActionDispatcher, streamingConnectionManager *api.StreamingConnectionManager, dashConfig config.Dash) *API {
+	logger := dashConfig.Logger().With("component", "api")
 	return &API{
 		ctx:              ctx,
 		prefix:           prefix,
-		clusterClient:    clusterClient,
-		moduleManager:    moduleManager,
 		actionDispatcher: actionDispatcher,
 		modulePaths:      make(map[string]module.Module),
+		dashConfig:       dashConfig,
 		logger:           logger,
 		forceUpdateCh:    make(chan bool, 1),
+		scManager:        streamingConnectionManager,
 	}
 }
 
@@ -153,55 +152,16 @@ func (a *API) ForceUpdate() error {
 }
 
 // Handler returns a HTTP handler for the service.
-func (a *API) Handler(ctx context.Context) (*mux.Router, error) {
+func (a *API) Handler(ctx context.Context) (http.Handler, error) {
+	if a.dashConfig == nil {
+		return nil, fmt.Errorf("missing dashConfig")
+	}
 	router := mux.NewRouter()
-	router.Use(rebindHandler(ctx, acceptedHosts()))
+	router.Use(rebindHandler(ctx, AcceptedHosts()))
 
 	s := router.PathPrefix(a.prefix).Subrouter()
 
-	nsClient, err := a.clusterClient.NamespaceClient()
-	if err != nil {
-		return nil, errors.Wrap(err, "retrieve namespace client")
-	}
-
-	infoClient, err := a.clusterClient.InfoClient()
-	if err != nil {
-		return nil, errors.Wrap(err, "retrieve cluster info client")
-	}
-
-	namespacesService := newNamespaces(nsClient, a.logger)
-	s.Handle("/namespaces", namespacesService).Methods(http.MethodGet)
-
-	ans := newAPINavSections(a.modules)
-
-	navigationService := newNavigationHandler(ans, a.logger)
-	// Support no namespace (default) or specifying namespace in path
-	s.Handle("/navigationHandler", navigationService).Methods(http.MethodGet)
-	s.Handle("/navigationHandler/namespace/{namespace}", navigationService).Methods(http.MethodGet)
-
-	namespaceUpdateService := newNamespace(a.moduleManager, a.logger)
-	s.HandleFunc("/namespace", namespaceUpdateService.update).Methods(http.MethodPost)
-	s.HandleFunc("/namespace", namespaceUpdateService.read).Methods(http.MethodGet)
-
-	infoService := newClusterInfo(infoClient, a.logger)
-	s.Handle("/cluster-info", infoService)
-
-	actionService := newAction(a.logger, a.actionDispatcher)
-	s.Handle("/action", actionService)
-
-	// Register content routes
-	contentService := &contentHandler{
-		nsClient:      nsClient,
-		modulePaths:   a.modulePaths,
-		modules:       a.modules,
-		logger:        a.logger,
-		prefix:        a.prefix,
-		forceUpdateCh: a.forceUpdateCh,
-	}
-
-	if err := contentService.RegisterRoutes(ctx, s); err != nil {
-		a.logger.WithErr(err).Errorf("register routers")
-	}
+	s.Handle("/stream", streamService(a.scManager, a.dashConfig))
 
 	s.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.logger.Errorf("api handler not found: %s", r.URL.String())
@@ -211,38 +171,49 @@ func (a *API) Handler(ctx context.Context) (*mux.Router, error) {
 	return router, nil
 }
 
-// RegisterModule registers a module with the API service.
-func (a *API) RegisterModule(m module.Module) error {
-	contentPath := path.Join("/content", m.ContentPath())
-	a.logger.With("contentPath", contentPath).Debugf("registering content path")
-	a.modulePaths[contentPath] = m
-	a.modules = append(a.modules, m)
+// LoadingAPI is an API for startup modules to run
+type LoadingAPI struct {
+	ctx              context.Context
+	moduleManager    module.ManagerInterface
+	actionDispatcher api.ActionDispatcher
+	prefix           string
+	logger           log.Logger
+	scManager        *api.StreamingConnectionManager
 
+	modulePaths   map[string]module.Module
+	modules       []module.Module
+	forceUpdateCh chan bool
+}
+
+var _ Service = (*LoadingAPI)(nil)
+
+// NewLoadingAPI creates an instance of LoadingAPI
+func NewLoadingAPI(ctx context.Context, prefix string, actionDispatcher api.ActionDispatcher, websocketClientManager *api.StreamingConnectionManager, logger log.Logger) *LoadingAPI {
+	logger = logger.With("component", "loading api")
+	return &LoadingAPI{
+		ctx:              ctx,
+		prefix:           prefix,
+		actionDispatcher: actionDispatcher,
+		modulePaths:      make(map[string]module.Module),
+		logger:           logger,
+		forceUpdateCh:    make(chan bool, 1),
+		scManager:        websocketClientManager,
+	}
+}
+
+func (l *LoadingAPI) ForceUpdate() error {
+	l.forceUpdateCh <- true
 	return nil
 }
 
-type apiNavSections struct {
-	modules []module.Module
-}
+// Handler contains a list of handlers
+func (l *LoadingAPI) Handler(ctx context.Context) (http.Handler, error) {
+	router := mux.NewRouter()
+	router.Use(rebindHandler(ctx, AcceptedHosts()))
 
-func newAPINavSections(modules []module.Module) *apiNavSections {
-	return &apiNavSections{
-		modules: modules,
-	}
-}
+	s := router.PathPrefix(l.prefix).Subrouter()
 
-func (ans *apiNavSections) Sections(ctx context.Context, namespace string) ([]navigation.Navigation, error) {
-	var sections []navigation.Navigation
+	s.Handle("/stream", loadingStreamService(l.scManager))
 
-	for _, m := range ans.modules {
-		contentPath := path.Join("/content", m.ContentPath())
-		navList, err := m.Navigation(ctx, namespace, contentPath)
-		if err != nil {
-			return nil, err
-		}
-
-		sections = append(sections, navList...)
-	}
-
-	return sections, nil
+	return router, nil
 }

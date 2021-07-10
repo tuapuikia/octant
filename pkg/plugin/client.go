@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/pkg/action"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 var (
@@ -52,6 +52,12 @@ func (c Capabilities) HasTabSupport(gvk schema.GroupVersionKind) bool {
 	return includesGVK(gvk, c.SupportsTab)
 }
 
+// HasObjectStatusSupport returns true if this plugins supports creating object status for
+// the supplied GVK.
+func (c Capabilities) HasObjectStatusSupport(gvk schema.GroupVersionKind) bool {
+	return includesGVK(gvk, c.SupportsObjectStatus)
+}
+
 // PrintResponse is a printer response from the plugin. The dashboard
 // will use this to the add the plugin's output to a summary view.
 type PrintResponse struct {
@@ -67,7 +73,7 @@ type PrintResponse struct {
 // dashboard will use this to create an additional tab for
 // an object.
 type TabResponse struct {
-	Tab *component.Tab
+	Tab *component.Tab `json:"tab"`
 }
 
 // ObjectStatusResponse is an object status response from plugin.
@@ -88,9 +94,9 @@ type Metadata struct {
 type Service interface {
 	Register(ctx context.Context, dashboardAPIAddress string) (Metadata, error)
 	Print(ctx context.Context, object runtime.Object) (PrintResponse, error)
-	PrintTab(ctx context.Context, object runtime.Object) (TabResponse, error)
+	PrintTabs(ctx context.Context, object runtime.Object) ([]TabResponse, error)
 	ObjectStatus(ctx context.Context, object runtime.Object) (ObjectStatusResponse, error)
-	HandleAction(ctx context.Context, payload action.Payload) error
+	HandleAction(ctx context.Context, actionName string, payload action.Payload) error
 }
 
 // ModuleService is the interface that is exposed as a plugin as a module. The plugin is required to implement this

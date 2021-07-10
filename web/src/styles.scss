@@ -1,4 +1,4 @@
-/* Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,5 +8,41 @@
 @import './sass/mixins';
 @import './sass/variables';
 @import '~highlight.js/styles/github.css';
-@import "~@ng-select/ng-select/themes/default.theme.css";
+@import '~overlayscrollbars/css/OverlayScrollbars.css';
+@import '~@ng-select/ng-select/themes/default.theme.css';
+@import '~@cds/core/styles/theme.dark.min.css';
+@import '~@cds/core/global.min';
+@import '~jsoneditor/dist/jsoneditor.min.css';
+
+// Avoid Datagrid's header sticky position.
+.datagrid-table .datagrid-header {
+  position: initial;
+}
+
+.clr-vertical-nav .nav-btn {
+  display: none;
+}
+
+// avoid markdown text rendering badly in table/cards
+.datagrid-cell .markdown p, .card-block .markdown p {
+  line-height: 0.7rem;
+  font-size: 0.65rem;
+
+  &:first-child {
+    margin-top: 0;
+  }
+}
+
+app-view-card cds-alert-group {
+  margin-bottom: 10px;
+}
+
+cds-modal-content app-alert {
+  width: 100%;
+}
+
+// TODO: Migrate text to use cds color.
+cds-modal-content app-view-text {
+  color: var(--cds-global-typography-color-500);
+}
 

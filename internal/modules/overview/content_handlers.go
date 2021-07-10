@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,7 +8,7 @@ package overview
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
-	"k8s.io/kubernetes/staging/src/k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/apimachinery/pkg/util/duration"
 )
 
 // translateTimestamp returns the elapsed time since timestamp in

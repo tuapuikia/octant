@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -13,9 +13,9 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/pkg/action"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
 )
 
 func defaultServerFactory(service plugin.Service) {
@@ -33,9 +33,9 @@ func WithPrinter(fn HandlerPrinterFunc) PluginOption {
 }
 
 // WithTabPrinter configures the plugin to have a tab printer.
-func WithTabPrinter(fn HandlerTabPrintFunc) PluginOption {
+func WithTabPrinter(funcs ...HandlerTabPrintFunc) PluginOption {
 	return func(p *Plugin) {
-		p.pluginHandler.HandlerFuncs.PrintTab = fn
+		p.pluginHandler.HandlerFuncs.PrintTabs = funcs
 	}
 }
 
@@ -146,7 +146,7 @@ func (r *baseRequest) Context() context.Context {
 }
 
 func (r *baseRequest) GeneratePath(pathParts ...string) string {
-	return path.Join(append([]string{"content", r.pluginName}, pathParts...)...)
+	return path.Join(append([]string{r.pluginName}, pathParts...)...)
 }
 
 // PrintRequest is a request for printing.
@@ -155,6 +155,7 @@ type PrintRequest struct {
 
 	DashboardClient Dashboard
 	Object          runtime.Object
+	ClientState     plugin.ClientState
 }
 
 // ActionRequest is a request for actions.
@@ -162,7 +163,9 @@ type ActionRequest struct {
 	baseRequest
 
 	DashboardClient Dashboard
+	ActionName      string
 	Payload         action.Payload
+	ClientState     plugin.ClientState
 }
 
 // NavigationRequest is a request for navigation.
@@ -170,6 +173,7 @@ type NavigationRequest struct {
 	baseRequest
 
 	DashboardClient Dashboard
+	ClientState     plugin.ClientState
 }
 
 type HandlerPrinterFunc func(request *PrintRequest) (plugin.PrintResponse, error)
@@ -182,7 +186,7 @@ type HandlerInitRoutesFunc func(router *Router)
 // HandlerFuncs are functions for configuring a plugin.
 type HandlerFuncs struct {
 	Print        HandlerPrinterFunc
-	PrintTab     HandlerTabPrintFunc
+	PrintTabs    []HandlerTabPrintFunc
 	ObjectStatus HandlerObjectStatusFunc
 	HandleAction HandlerActionFunc
 	Navigation   HandlerNavigationFunc

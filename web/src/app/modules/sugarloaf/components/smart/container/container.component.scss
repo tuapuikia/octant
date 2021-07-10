@@ -1,0 +1,148 @@
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+
+@mixin electron-header {
+  -webkit-app-region: drag;
+  padding-left: var(--padding-left);
+}
+
+:host-context(body) {
+  --background-color: #fafafa;
+}
+
+:host-context(body.dark) {
+  --background-color: #1b2a32;
+}
+
+.octant-container {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  height: 100vh;
+  background-color: var(--background-color);
+}
+
+:host ::ng-deep .navigation-top {
+  height: 100%;
+  clr-vertical-nav {
+    padding-top: 0px;
+  }
+}
+
+.main-container {
+  // Navigation's color variables for Light Theme.
+
+  :host-context(body) {
+    --navigation-border-color: rgb(215, 215, 215);
+    --navigation-background-color: #0079ad;
+  }
+
+  // Navigation's color variables for Dark Theme.
+  :host-context(body.dark) {
+    --navigation-border-color: #304250;
+    --navigation-background-color: #304250;
+  }
+
+  :host-context(body.platform-darwin) {
+    --padding-left: 0px;
+  }
+
+  :host-context(body.electron) {
+    .notifier {
+      @include electron-header;
+    }
+
+    .header {
+      @include electron-header;
+    }
+
+    .header-nav {
+      padding-left: 7rem !important;
+
+      clr-icon + clr-icon {
+        margin-left: 0rem;
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .header-nav {
+        padding-left: 0.5rem !important;
+      }
+    }
+
+    .header-centered {
+      &:hover {
+        cursor: pointer;
+      }
+    }
+
+    .input-filter {
+      margin-left: 0.8rem;
+    }
+  }
+
+  .header-centered {
+    margin: auto 0;
+  }
+
+  .header {
+    background: var(--navigation-background-color);
+    flex-wrap: wrap;
+    height: auto;
+    flex-basis: auto;
+
+    .branding {
+      padding-left: 0.6rem;
+
+      clr-icon {
+        width: 2.3rem;
+        height: 2.3rem;
+        margin-right: 0.9rem;
+      }
+    }
+
+    @media (max-width: 1000px) {
+      .branding {
+        display: none;
+      }
+    }
+
+    .header-nav {
+      padding-left: 1rem;
+
+      .namespace-switcher,
+      .input-filter {
+        margin-right: 10px;
+      }
+
+      .namespace-switcher {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        margin-right: 20px;
+      }
+
+      .input-filter {
+        z-index: 999; // clarity's data-grid beats this
+        width: calc(150px + (300 - 150) * ((100vw - 500px) / (1920 - 500)));
+      }
+    }
+  }
+
+  .content-container {
+    .navigation {
+      border-right: 1px solid var(--navigation-border-color);
+    }
+
+    .content-area {
+      flex: 1;
+      padding: 0;
+      overflow: hidden;
+    }
+  }
+}
+
+

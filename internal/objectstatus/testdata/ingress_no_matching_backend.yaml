@@ -1,0 +1,15 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: ingress-no-service-found
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+    rules:
+    - http:
+        paths:
+        - path: /testpath
+          backend:
+            service:
+              name: no-such-service
+              port:
+                number: 90

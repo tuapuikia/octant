@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/vmware/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/log"
 )
 
 var (
@@ -40,9 +40,9 @@ func (pm *PathMatcher) Register(ctx context.Context, pf PathFilter) {
 
 	logger.With(
 		"name", pm.name,
-		"path", pf.path,
+		"path", pf.filterPath,
 	).Debugf("register path")
-	pm.filters[pf.path] = pf
+	pm.filters[pf.filterPath] = pf
 }
 
 func (pm *PathMatcher) Deregister(ctx context.Context, paths ...string) {

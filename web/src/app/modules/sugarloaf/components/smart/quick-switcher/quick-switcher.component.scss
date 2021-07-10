@@ -1,0 +1,78 @@
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+cds-modal {
+  --animation-duration: 0s;
+  position: absolute;
+
+  cds-modal-actions {
+    font-size: x-small;
+    color: var(--clr-global-font-color);
+
+    pre {
+      border: none;
+      margin: 0;
+    }
+
+    code {
+      background-color: var(--destinationActive-bg-color);
+      padding: 2px;
+      block-size: auto;
+    }
+  }
+}
+
+
+.quick-switcher-modal {
+  // Color variables for Light Theme.
+  :host-context(body) {
+    --destinationActive-color: #000;
+    --destinationActive-bg-color: #d8e3e9;
+  }
+
+  // Color variables for Dark Theme.
+  :host-context(body.dark) {
+    --destinationActive-color: #fff;
+    --destinationActive-bg-color: #324f62;
+  }
+
+  .filter-input {
+    padding: 1rem 0.5rem;
+    font-size: 22px;
+  }
+
+  th {
+    text-align: left;
+    font-size: 10px;
+    border: 0;
+    text-transform: uppercase;
+  }
+
+  tbody {
+    display: block;
+    max-height: 60vh;
+    cursor: pointer;
+  }
+
+  tr {
+    padding-left: 11px !important;
+    display: table;
+    width: 100%;
+  }
+
+  .destinations td:first-child {
+    text-align: left;
+    font-weight: 500;
+  }
+
+  .destinations td:last-child {
+    text-align: right;
+    opacity: 0.6;
+  }
+
+  .destination-active {
+    background-color: var(--destinationActive-bg-color);
+    color: var(--destinationActive-color);
+  }
+}

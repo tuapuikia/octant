@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,28 +7,39 @@ package describer
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes/scheme"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/modules/overview/logviewer"
-	"github.com/vmware/octant/internal/modules/overview/resourceviewer"
-	"github.com/vmware/octant/internal/modules/overview/yamlviewer"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/api"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/internal/util/kubernetes"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
+// defaultObjectTabs are the default tabs for an object (that is not a custom resource).
+func defaultObjectTabs() []Tab {
+	return []Tab{
+		{Name: "Summary", Factory: SummaryTab},
+		{Name: "Metadata", Factory: MetadataTab},
+		{Name: "Resource Viewer", Factory: ResourceViewerTab},
+		{Name: "YAML", Factory: YAMLViewerTab},
+		{Name: "Logs", Factory: LogsTab},
+		{Name: "Terminal", Factory: TerminalTab},
+	}
+}
+
+// ObjectConfig is configuration for Object.
 type ObjectConfig struct {
-	Path                  string
-	BaseTitle             string
-	ObjectType            func() interface{}
-	StoreKey              store.Key
-	DisableResourceViewer bool
-	IconName              string
-	IconSource            string
+	Path           string
+	BaseTitle      string
+	ObjectType     func() interface{}
+	StoreKey       store.Key
+	TabsGenerator  TabsGenerator
+	TabDescriptors []Tab
 }
 
 // Object describes an object.
@@ -40,191 +51,112 @@ type Object struct {
 	objectType            func() interface{}
 	objectStoreKey        store.Key
 	disableResourceViewer bool
-	tabFuncDescriptors    []tabFuncDescriptor
-	iconName              string
-	iconSource            string
+	tabFuncDescriptors    []Tab
+	tabsGenerator         TabsGenerator
 }
 
 // NewObject creates an instance of Object.
 func NewObject(c ObjectConfig) *Object {
-	o := &Object{
-		path:                  c.Path,
-		baseTitle:             c.BaseTitle,
-		base:                  newBaseDescriber(),
-		objectStoreKey:        c.StoreKey,
-		objectType:            c.ObjectType,
-		disableResourceViewer: c.DisableResourceViewer,
-		iconName:              c.IconName,
-		iconSource:            c.IconSource,
+	tg := c.TabsGenerator
+	if tg == nil {
+		tg = NewObjectTabsGenerator()
 	}
 
-	o.tabFuncDescriptors = []tabFuncDescriptor{
-		{name: "summary", tabFunc: o.addSummaryTab},
-		{name: "resource viewer", tabFunc: o.addResourceViewerTab},
-		{name: "yaml", tabFunc: o.addYAMLViewerTab},
-		{name: "logs", tabFunc: o.addLogsTab},
+	td := c.TabDescriptors
+	if td == nil {
+		td = defaultObjectTabs()
+	}
+
+	o := &Object{
+		path:               c.Path,
+		baseTitle:          c.BaseTitle,
+		base:               newBaseDescriber(),
+		objectStoreKey:     c.StoreKey,
+		objectType:         c.ObjectType,
+		tabsGenerator:      tg,
+		tabFuncDescriptors: td,
 	}
 
 	return o
 }
 
-type tabFunc func(ctx context.Context, object runtime.Object, cr *component.ContentResponse, options Options) error
-
-type tabFuncDescriptor struct {
-	name    string
-	tabFunc tabFunc
-}
-
-// Describe describes an object.
-func (d *Object) Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error) {
-	logger := log.From(ctx)
-
+// Describe describes an object. An object description is comprised of multiple tabs of content.
+// By default, there will be the following tabs: summary, metadata, resource viewer, and yaml.
+// If the object is a pod, there will also be a log and terminal tab. If plugins can contribute
+// tabs to this object, those tabs will be included as well.
+//
+// This function should always return a content response even if there is an error.
+func (d *Object) Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error) {
 	object, err := options.LoadObject(ctx, namespace, options.Fields, d.objectStoreKey)
 	if err != nil {
-		return EmptyContentResponse, errors.Wrapf(err, "loading object with %s", d.objectStoreKey.String())
+		return component.EmptyContentResponse, api.NewNotFoundError(d.path)
 	} else if object == nil {
-		return EmptyContentResponse, errors.Errorf("unable to load object %s", d.objectStoreKey)
+		cr := component.NewContentResponse(component.TitleFromString("LoadObject Error"))
+		c := CreateErrorTab("Error", fmt.Errorf("unable to load object %s", d.objectStoreKey))
+		cr.Add(c)
+		return *cr, nil
 	}
 
 	item := d.objectType()
 
-	if err := scheme.Scheme.Convert(object, item, nil); err != nil {
-		return EmptyContentResponse, errors.Wrapf(err, "converting dynamic object to a type")
-	}
-
-	if err := copyObjectMeta(item, object); err != nil {
-		return EmptyContentResponse, errors.Wrap(err, "copying object metadata")
+	if err := kubernetes.FromUnstructured(object, item); err != nil {
+		cr := component.NewContentResponse(component.TitleFromString("Converting Dynamic Object Error"))
+		c := CreateErrorTab("Error", fmt.Errorf("converting dynamic object to a type: %w", err))
+		cr.Add(c)
+		return *cr, nil
 	}
 
 	accessor := meta.NewAccessor()
 	objectName, _ := accessor.Name(object)
 
-	title := append([]component.TitleComponent{}, component.NewText(d.baseTitle))
-	if objectName != "" {
-		title = append(title, component.NewText(objectName))
-	}
-
+	title := component.Title(component.NewText(objectName))
 	cr := component.NewContentResponse(title)
-	cr.IconSource = d.iconSource
-	cr.IconName = d.iconName
 
 	currentObject, ok := item.(runtime.Object)
 	if !ok {
-		return EmptyContentResponse, errors.Errorf("expected item to be a runtime object. It was a %T",
-			item)
+		c := CreateErrorTab("Error", fmt.Errorf("expected item to be a runtime object. It was a %T", item))
+		cr.Add(c)
+		return *cr, nil
 	}
 
-	hasTabError := false
-	for _, tfd := range d.tabFuncDescriptors {
-		if err := tfd.tabFunc(ctx, currentObject, cr, options); err != nil {
-			hasTabError = true
-			logger.With(
-				"err", err,
-				"tab-name", tfd.name,
-			).Errorf("generating object Describer tab")
-		}
-	}
-
-	if hasTabError {
-		logger.With("tab-object", object).Errorf("unable to generate all tabs for object")
-	}
-
-	tabs, err := options.PluginManager().Tabs(ctx, object)
+	objAccessor, err := meta.Accessor(currentObject)
 	if err != nil {
-		return EmptyContentResponse, errors.Wrap(err, "getting tabs from plugins")
+		return component.EmptyContentResponse, err
 	}
 
-	for _, tab := range tabs {
-		tab.Contents.SetAccessor(tab.Name)
-		cr.Add(&tab.Contents)
+	if objAccessor.GetDeletionTimestamp() == nil {
+		key, err := store.KeyFromObject(currentObject)
+		if err != nil {
+			return component.EmptyContentResponse, err
+		}
+
+		confirmation, err := octant.DeleteObjectConfirmationButton(currentObject)
+		if err != nil {
+			return component.EmptyContentResponse, err
+		}
+
+		cr.AddButton("Delete", action.CreatePayload(octant.ActionDeleteObject,
+			key.ToActionPayload()), confirmation)
 	}
+
+	config := TabsGeneratorConfig{
+		Object:      currentObject,
+		TabsFactory: objectTabsFactory(ctx, currentObject, d.tabFuncDescriptors, options),
+		Options:     options,
+	}
+	tabComponents, err := d.tabsGenerator.Generate(ctx, config)
+	if err != nil {
+		return component.EmptyContentResponse, fmt.Errorf("generate tabs: %w", err)
+	}
+
+	cr.Add(tabComponents...)
 
 	return *cr, nil
 }
 
+// PathFilters returns the path filters for this object.
 func (d *Object) PathFilters() []PathFilter {
 	return []PathFilter{
 		*NewPathFilter(d.path, d),
 	}
-}
-
-func (d *Object) addSummaryTab(ctx context.Context, object runtime.Object, cr *component.ContentResponse, options Options) error {
-	vc, err := options.Printer.Print(ctx, object, options.PluginManager())
-	if vc == nil {
-		return errors.Wrap(err, "unable to print a nil object")
-	}
-
-	if err != nil {
-		errComponent := component.NewError(component.TitleFromString("Summary"), err)
-		cr.Add(errComponent)
-
-		logger := log.From(ctx)
-		logger.Errorf("printing object: %s", err)
-
-		return nil
-	}
-
-	vc.SetAccessor("summary")
-	cr.Add(vc)
-
-	return nil
-}
-
-func (d *Object) addResourceViewerTab(ctx context.Context, object runtime.Object, cr *component.ContentResponse, options Options) error {
-	if !d.disableResourceViewer {
-
-		rv, err := resourceviewer.New(options.Dash, resourceviewer.WithDefaultQueryer(options.Dash, options.Queryer))
-		if err != nil {
-			return err
-		}
-
-		resourceViewerComponent, err := rv.Visit(ctx, object)
-		if err != nil {
-			return err
-		}
-
-		resourceViewerComponent.SetAccessor("resourceViewer")
-		cr.Add(resourceViewerComponent)
-	}
-
-	return nil
-}
-
-func (d *Object) addYAMLViewerTab(ctx context.Context, object runtime.Object, cr *component.ContentResponse, options Options) error {
-	yvComponent, err := yamlviewer.ToComponent(object)
-
-	if err != nil {
-		errComponent := component.NewError(component.TitleFromString("YAML"), err)
-		cr.Add(errComponent)
-
-		logger := log.From(ctx)
-		logger.Errorf("converting object to YAML: %s", err)
-
-		return nil
-	}
-
-	yvComponent.SetAccessor("yaml")
-	cr.Add(yvComponent)
-	return nil
-
-}
-
-func (d *Object) addLogsTab(ctx context.Context, object runtime.Object, cr *component.ContentResponse, options Options) error {
-	if isPod(object) {
-		logsComponent, err := logviewer.ToComponent(object)
-		if err != nil {
-			errComponent := component.NewError(component.TitleFromString("Logs"), err)
-			cr.Add(errComponent)
-
-			logger := log.From(ctx)
-			logger.Errorf("retrieving logs for pod: %s", err)
-
-			return nil
-		}
-
-		logsComponent.SetAccessor("logs")
-		cr.Add(logsComponent)
-	}
-
-	return nil
 }

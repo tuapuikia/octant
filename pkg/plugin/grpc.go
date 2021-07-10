@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,18 +7,22 @@ package plugin
 
 import (
 	"context"
-	"encoding/json"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/pkg/errors"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/pkg/action"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin/dashboard"
-	"github.com/vmware/octant/pkg/view/component"
+	ocontext "github.com/vmware-tanzu/octant/internal/context"
+
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin/dashboard"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // GRPCClient is the dashboard GRPC client.
@@ -51,11 +55,18 @@ func (c *GRPCClient) Content(ctx context.Context, contentPath string) (component
 	var contentResponse component.ContentResponse
 
 	err := c.run(func() error {
-		req := &dashboard.ContentRequest{
-			Path: contentPath,
+		clientState := ocontext.ClientStateFrom(ctx)
+		clientStateData, err := json.Marshal(&clientState)
+		if err != nil {
+			return err
 		}
 
-		resp, err := c.client.Content(ctx, req)
+		req := &dashboard.ContentRequest{
+			Path:        contentPath,
+			ClientState: clientStateData,
+		}
+
+		resp, err := c.client.Content(ctx, req, grpc.WaitForReady(true))
 		if err != nil {
 			return errors.Wrap(err, "grpc client content")
 		}
@@ -75,18 +86,26 @@ func (c *GRPCClient) Content(ctx context.Context, contentPath string) (component
 }
 
 // HandleAction runs an action on a plugin.
-func (c *GRPCClient) HandleAction(ctx context.Context, payload action.Payload) error {
+func (c *GRPCClient) HandleAction(ctx context.Context, actionName string, payload action.Payload) error {
 	err := c.run(func() error {
 		data, err := json.Marshal(&payload)
 		if err != nil {
 			return err
 		}
 
-		req := &dashboard.HandleActionRequest{
-			Payload: data,
+		clientState := ocontext.ClientStateFrom(ctx)
+		clientStateData, err := json.Marshal(&clientState)
+		if err != nil {
+			return err
 		}
 
-		_, err = c.client.HandleAction(ctx, req)
+		req := &dashboard.HandleActionRequest{
+			ActionName:  actionName,
+			Payload:     data,
+			ClientState: clientStateData,
+		}
+
+		_, err = c.client.HandleAction(ctx, req, grpc.WaitForReady(true))
 		if err != nil {
 			if s, isStatus := status.FromError(err); isStatus {
 				return errors.Errorf("grpc error: %s", s.Message())
@@ -104,10 +123,22 @@ func (c *GRPCClient) HandleAction(ctx context.Context, payload action.Payload) e
 func (c *GRPCClient) Navigation(ctx context.Context) (navigation.Navigation, error) {
 	var entries navigation.Navigation
 
-	err := c.run(func() error {
-		req := &dashboard.NavigationRequest{}
+	if ctx.Err() == context.Canceled {
+		return navigation.Navigation{}, nil
+	}
 
-		resp, err := c.client.Navigation(ctx, req)
+	err := c.run(func() error {
+		clientState := ocontext.ClientStateFrom(ctx)
+		clientStateData, err := json.Marshal(&clientState)
+		if err != nil {
+			return err
+		}
+
+		req := &dashboard.NavigationRequest{
+			ClientState: clientStateData,
+		}
+
+		resp, err := c.client.Navigation(ctx, req, grpc.WaitForReady(true))
 		if err != nil {
 			return errors.Wrap(err, "grpc client response")
 		}
@@ -133,7 +164,7 @@ func (c *GRPCClient) Register(ctx context.Context, dashboardAPIAddress string) (
 			DashboardAPIAddress: dashboardAPIAddress,
 		}
 
-		resp, err := c.client.Register(ctx, registerRequest)
+		resp, err := c.client.Register(ctx, registerRequest, grpc.WaitForReady(true))
 		if err != nil {
 			spew.Dump(err)
 			return errors.WithMessage(err, "unable to call register function")
@@ -162,12 +193,18 @@ func (c *GRPCClient) ObjectStatus(ctx context.Context, object runtime.Object) (O
 	var osr ObjectStatusResponse
 
 	err := c.run(func() error {
-		in, err := createObjectRequest(object)
+		clientState := ocontext.ClientStateFrom(ctx)
+		clientStateData, err := json.Marshal(&clientState)
 		if err != nil {
 			return err
 		}
 
-		resp, err := c.client.ObjectStatus(ctx, in)
+		in, err := createObjectRequest(object, clientStateData)
+		if err != nil {
+			return err
+		}
+
+		resp, err := c.client.ObjectStatus(ctx, in, grpc.WaitForReady(true))
 		if err != nil {
 			return errors.Wrap(err, "grpc client object status")
 		}
@@ -196,12 +233,18 @@ func (c *GRPCClient) Print(ctx context.Context, object runtime.Object) (PrintRes
 	var pr PrintResponse
 
 	err := c.run(func() error {
-		in, err := createObjectRequest(object)
+		clientState := ocontext.ClientStateFrom(ctx)
+		clientStateData, err := json.Marshal(&clientState)
 		if err != nil {
 			return err
 		}
 
-		resp, err := c.client.Print(ctx, in)
+		in, err := createObjectRequest(object, clientStateData)
+		if err != nil {
+			return err
+		}
+
+		resp, err := c.client.Print(ctx, in, grpc.WaitForReady(true))
 		if err != nil {
 			return errors.Wrap(err, "grpc client print")
 		}
@@ -239,60 +282,70 @@ func (c *GRPCClient) Print(ctx context.Context, object runtime.Object) (PrintRes
 	return pr, nil
 }
 
-func createObjectRequest(object runtime.Object) (*dashboard.ObjectRequest, error) {
+func createObjectRequest(object runtime.Object, clientState []byte) (*dashboard.ObjectRequest, error) {
 	data, err := json.Marshal(object)
 	if err != nil {
 		return nil, err
 	}
 
 	or := &dashboard.ObjectRequest{
-		Object: data,
+		Object:      data,
+		ClientState: clientState,
 	}
 
 	return or, err
 }
 
-// PrintTab creates a tab for an object.
-func (c *GRPCClient) PrintTab(ctx context.Context, object runtime.Object) (TabResponse, error) {
-	var tab component.Tab
+// PrintTabs creates one or more tabs for an object.
+func (c *GRPCClient) PrintTabs(ctx context.Context, object runtime.Object) ([]TabResponse, error) {
+	var responses []TabResponse
 
 	err := c.run(func() error {
-		in, err := createObjectRequest(object)
+		clientState := ocontext.ClientStateFrom(ctx)
+		clientStateData, err := json.Marshal(&clientState)
 		if err != nil {
 			return err
 		}
 
-		resp, err := c.client.PrintTab(ctx, in)
+		in, err := createObjectRequest(object, clientStateData)
+		if err != nil {
+			return err
+		}
+
+		resp, err := c.client.PrintTabs(ctx, in, grpc.WaitForReady(true))
 		if err != nil {
 			return errors.Wrap(err, "grpc client print tab")
 		}
 
-		var to component.TypedObject
-		if err := json.Unmarshal(resp.Layout, &to); err != nil {
-			return err
+		for _, t := range resp.Tabs {
+			var tab component.Tab
+			var to component.TypedObject
+			if err := json.Unmarshal(t.Layout, &to); err != nil {
+				return err
+			}
+
+			c, err := to.ToComponent()
+			if err != nil {
+				return err
+			}
+
+			layout, ok := c.(*component.FlexLayout)
+			if !ok {
+				return errors.Errorf("expected to be flex layout was: %T", c)
+			}
+
+			tab.Name = t.Name
+			tab.Contents = *layout
+			responses = append(responses, TabResponse{&tab})
 		}
-
-		c, err := to.ToComponent()
-		if err != nil {
-			return err
-		}
-
-		layout, ok := c.(*component.FlexLayout)
-		if !ok {
-			return errors.Errorf("expected to be flex layout was: %T", c)
-		}
-
-		tab.Name = resp.Name
-		tab.Contents = *layout
-
 		return nil
 	})
 
 	if err != nil {
-		return TabResponse{}, err
+		return []TabResponse{}, err
 	}
 
-	return TabResponse{Tab: &tab}, nil
+	return responses, nil
 }
 
 // GRPCServer is the grpc server the dashboard will use to communicate with the
@@ -310,6 +363,13 @@ func (s *GRPCServer) Content(ctx context.Context, req *dashboard.ContentRequest)
 	if !ok {
 		return nil, errors.Errorf("plugin is not a module, it's a %T", s.Impl)
 	}
+
+	var clientState ocontext.ClientState
+	if err := json.Unmarshal(req.ClientState, &clientState); err != nil {
+		return nil, err
+	}
+
+	ctx = ocontext.WithClientState(ctx, clientState)
 
 	contentResponse, err := service.Content(ctx, req.Path)
 	if err != nil {
@@ -333,7 +393,13 @@ func (s *GRPCServer) HandleAction(ctx context.Context, handleActionRequest *dash
 		return nil, err
 	}
 
-	if err := s.Impl.HandleAction(ctx, payload); err != nil {
+	var clientState ocontext.ClientState
+	if err := json.Unmarshal(handleActionRequest.ClientState, &clientState); err != nil {
+		return nil, err
+	}
+
+	ctx = ocontext.WithClientState(ctx, clientState)
+	if err := s.Impl.HandleAction(ctx, handleActionRequest.ActionName, payload); err != nil {
 		return nil, err
 	}
 
@@ -347,6 +413,12 @@ func (s *GRPCServer) Navigation(ctx context.Context, req *dashboard.NavigationRe
 		return nil, errors.Errorf("plugin is not a module, it's a %T", s.Impl)
 	}
 
+	var clientState ocontext.ClientState
+	if err := json.Unmarshal(req.ClientState, &clientState); err != nil {
+		return nil, err
+	}
+
+	ctx = ocontext.WithClientState(ctx, clientState)
 	entry, err := service.Navigation(ctx)
 	if err != nil {
 		return nil, err
@@ -355,7 +427,7 @@ func (s *GRPCServer) Navigation(ctx context.Context, req *dashboard.NavigationRe
 	converted := convertFromNavigation(entry)
 
 	return &dashboard.NavigationResponse{
-		Navigation: &converted,
+		Navigation: converted,
 	}, nil
 
 }
@@ -372,7 +444,7 @@ func (s *GRPCServer) Register(ctx context.Context, registerRequest *dashboard.Re
 	return &dashboard.RegisterResponse{
 		PluginName:   m.Name,
 		Description:  m.Description,
-		Capabilities: &capabilities,
+		Capabilities: capabilities,
 	}, nil
 }
 
@@ -383,6 +455,12 @@ func (s *GRPCServer) Print(ctx context.Context, objectRequest *dashboard.ObjectR
 		return nil, err
 	}
 
+	var clientState ocontext.ClientState
+	if err := json.Unmarshal(objectRequest.ClientState, &clientState); err != nil {
+		return nil, err
+	}
+
+	ctx = ocontext.WithClientState(ctx, clientState)
 	pr, err := s.Impl.Print(ctx, u)
 	if err != nil {
 		return nil, errors.Wrap(err, "grpc server print")
@@ -419,6 +497,12 @@ func (s *GRPCServer) ObjectStatus(ctx context.Context, objectRequest *dashboard.
 		return nil, err
 	}
 
+	var clientState ocontext.ClientState
+	if err := json.Unmarshal(objectRequest.ClientState, &clientState); err != nil {
+		return nil, err
+	}
+
+	ctx = ocontext.WithClientState(ctx, clientState)
 	osr, err := s.Impl.ObjectStatus(ctx, u)
 	if err != nil {
 		return nil, errors.Wrap(err, "grpc server object status")
@@ -448,33 +532,45 @@ func decodeObjectRequest(req *dashboard.ObjectRequest) (*unstructured.Unstructur
 	return u, nil
 }
 
-// PrintTab prints a tab for an object.
-func (s *GRPCServer) PrintTab(ctx context.Context, objectRequest *dashboard.ObjectRequest) (*dashboard.PrintTabResponse, error) {
+// PrintTabs prints one or more tabs for an object.
+func (s *GRPCServer) PrintTabs(ctx context.Context, objectRequest *dashboard.ObjectRequest) (*dashboard.PrintTabResponse, error) {
 	u, err := decodeObjectRequest(objectRequest)
 	if err != nil {
 		return nil, err
 	}
 
-	tabResponse, err := s.Impl.PrintTab(ctx, u)
+	var clientState ocontext.ClientState
+	if err := json.Unmarshal(objectRequest.ClientState, &clientState); err != nil {
+		return nil, err
+	}
+
+	ctx = ocontext.WithClientState(ctx, clientState)
+	tabResponses, err := s.Impl.PrintTabs(ctx, u)
 	if err != nil {
 		return nil, errors.Wrap(err, "grpc server print tab")
 	}
 
-	if tabResponse.Tab == nil {
-		return nil, errors.New("tab is nil")
+	out := dashboard.PrintTabResponse{
+		Tabs: []*dashboard.PrintTab{},
+	}
+	for _, tabResponse := range tabResponses {
+		if tabResponse.Tab == nil {
+			return nil, errors.New("tab is nil")
+		}
+
+		layoutBytes, err := json.Marshal(tabResponse.Tab.Contents)
+		if err != nil {
+			return nil, err
+		}
+
+		tab := &dashboard.PrintTab{
+			Name:   tabResponse.Tab.Name,
+			Layout: layoutBytes,
+		}
+		out.Tabs = append(out.Tabs, tab)
 	}
 
-	layoutBytes, err := json.Marshal(tabResponse.Tab.Contents)
-	if err != nil {
-		return nil, err
-	}
-
-	out := &dashboard.PrintTabResponse{
-		Name:   tabResponse.Tab.Name,
-		Layout: layoutBytes,
-	}
-
-	return out, nil
+	return &out, nil
 }
 
 // WatchAdd is called when a watched GVK has a new object added.

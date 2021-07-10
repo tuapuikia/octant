@@ -1,36 +1,34 @@
-// Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+// Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 
-import { CommonModule } from '@angular/common';
 import { NgModule } from '@angular/core';
 import { RouterModule, Routes } from '@angular/router';
 
-import { OverviewComponent } from './modules/overview/overview.component';
-import { PageNotFoundComponent } from './components/page-not-found/page-not-found.component';
-import { NamespaceResolver } from 'src/app/services/namespace/namespace-resolver.service';
-
 export const appRoutes: Routes = [
-  { path: 'content', children: [{ path: '**', component: OverviewComponent }] },
   {
-    path: '',
-    component: OverviewComponent,
-    resolve: {
-      namespace: NamespaceResolver,
-    },
-    pathMatch: 'full',
+    path: 'denali',
+    loadChildren: () =>
+      import('./modules/denali/denali.module').then(m => m.DenaliModule),
   },
-  { path: '**', component: PageNotFoundComponent },
+  {
+    path: '**',
+    loadChildren: () =>
+      import('./modules/sugarloaf/sugarloaf.module').then(
+        m => m.SugarloafModule
+      ),
+  },
 ];
 
 @NgModule({
   declarations: [],
   imports: [
+    // routing must come last
     RouterModule.forRoot(appRoutes, {
+      relativeLinkResolution: 'legacy',
       useHash: true,
+      enableTracing: false,
     }),
-    CommonModule,
   ],
-  providers: [NamespaceResolver],
 })
 export class AppRoutingModule {}

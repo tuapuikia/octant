@@ -1,0 +1,26 @@
+name: Verify generated code
+on:
+  push:
+    branches:
+    - master
+    - release-*
+  pull_request:
+    branches:
+    - master
+    - release-*
+jobs:
+  verify_generated:
+    name: Verify generated code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.16.x
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Verify generated code
+        run: ci/check-generated-mocks.sh
+      - name: Verify npm registry
+        run: go run build.go verify
+

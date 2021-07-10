@@ -1,13 +1,14 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package flexlayout
 
 import (
-	"github.com/vmware/octant/pkg/view/component"
 	"github.com/pkg/errors"
+
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 const (

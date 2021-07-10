@@ -2,17 +2,15 @@ package plugin
 
 import (
 	"context"
-	"net/http"
-	"path"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/module"
-	"github.com/vmware/octant/internal/octant"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/internal/module"
+	"github.com/vmware-tanzu/octant/internal/octant"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // ModuleProxy is a proxy that satisfies Octant module requirements. It allows plugins to behave as if they
@@ -43,17 +41,22 @@ func (m *ModuleProxy) Name() string {
 	return m.Metadata.Name
 }
 
-func (ModuleProxy) Handlers(ctx context.Context) map[string]http.Handler {
-	return map[string]http.Handler{}
+// Description returns the module's description.
+func (m *ModuleProxy) Description() string {
+	return m.Metadata.Description
+}
+
+func (m *ModuleProxy) ClientRequestHandlers() []octant.ClientRequestHandler {
+	return nil
 }
 
 // Content returns content from the plugin. Plugins are expected to handle paths appropriately.
-func (m *ModuleProxy) Content(ctx context.Context, contentPath, prefix, namespace string, opts module.ContentOptions) (component.ContentResponse, error) {
+func (m *ModuleProxy) Content(ctx context.Context, contentPath string, opts module.ContentOptions) (component.ContentResponse, error) {
 	return m.Service.Content(ctx, contentPath)
 }
 
 func (m *ModuleProxy) ContentPath() string {
-	return path.Join("/", m.Name())
+	return m.Name()
 }
 
 // Navigation returns navigation from the plugin.
@@ -110,4 +113,13 @@ func (ModuleProxy) AddCRD(ctx context.Context, crd *unstructured.Unstructured) e
 // RemoveCRD is a no-op
 func (ModuleProxy) RemoveCRD(ctx context.Context, crd *unstructured.Unstructured) error {
 	return nil
+}
+
+// ResetCRDs is a no-op
+func (ModuleProxy) ResetCRDs(ctx context.Context) error {
+	return nil
+}
+
+func (ModuleProxy) GvkFromPath(contentPath, namespace string) (schema.GroupVersionKind, error) {
+	return schema.GroupVersionKind{}, nil
 }

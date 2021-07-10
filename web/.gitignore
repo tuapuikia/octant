@@ -5,6 +5,8 @@
 /tmp
 /out-tsc
 /build
+/release
+/extraResources
 # Only exists if Bazel was run
 /bazel-out
 
@@ -50,3 +52,12 @@ Thumbs.db
 
 .idea
 ./rice-box.go
+
+/main.js
+/main.js.map
+/electron/*.js
+/src/coverage/*
+
+#compodoc documentation file
+/documentation.json
+/storybook-static

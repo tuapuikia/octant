@@ -1,0 +1,37 @@
+<div class="labels-wrapper" *ngIf="labels">
+  <div class="labels-container">
+    <ng-container *ngFor="let label of showLabels; trackBy: trackByIdentity">
+      <ng-container
+        *ngFor="let item of label | keyvalue; trackBy: trackByIdentity"
+      >
+        <app-octant-tooltip tooltipText="{{ item.key }}:{{ item.value }}" class="octant-tooltip">
+          <span
+            class="label label-light-blue clickable"
+            (click)="filterLabel(item.key, item.value)"
+          >
+            {{ item.key }}:{{ item.value }}
+          </span>
+        </app-octant-tooltip>
+      </ng-container>
+    </ng-container>
+  </div>
+
+  <clr-signpost *ngIf="overflowLabels?.length > 0">
+    <span class="badge badge-light-blue" clrSignpostTrigger>
+      {{ overflowLabels.length }}+
+    </span>
+    <clr-signpost-content *clrIfOpen>
+      <ng-container
+        *ngFor="let label of overflowLabels; trackBy: trackByIdentity"
+      >
+        <span
+          *ngFor="let item of label | keyvalue; trackBy: trackByIdentity"
+          class="label label-light-blue clickable"
+          (click)="filterLabel(item.key, item.value)"
+        >
+          {{ item.key }}:{{ item.value }}
+        </span>
+      </ng-container>
+    </clr-signpost-content>
+  </clr-signpost>
+</div>

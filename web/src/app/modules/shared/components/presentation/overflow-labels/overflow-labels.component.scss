@@ -1,0 +1,59 @@
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:host ::ng-deep .labels-wrapper {
+  display: flex;
+  align-items: center;
+
+  .labels-container {
+    display: grid;
+    grid-auto-flow: column;
+
+    .octant-tooltip {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: contents;
+
+      .tooltip-wrapper {
+        margin: 0 0.3rem 0 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .label {
+        display: inline-block;
+        line-height: 0.9rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        width: 100%;
+
+        &.clickable {
+          cursor: pointer;
+        }
+      }
+    }
+  }
+}
+
+.signpost {
+  // Clarity's Signpost trigger has no padding, so this is to fix badge's padding.
+  .badge.badge-light-blue.signpost-trigger {
+    padding: 0 0.2rem;
+  }
+
+  ::ng-deep &-content {
+    max-width: min-content;
+  }
+
+  // To avoid horizontal scroll-bar inside of the signpost content body.
+  ::ng-deep .signpost-wrap .signpost-content-body {
+    padding: 1rem;
+    max-height: 12.2rem;
+
+    .label:not(:last-child) {
+      margin-bottom: 0.2rem;
+    }
+  }
+}

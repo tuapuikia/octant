@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,9 +8,11 @@ package clusteroverview
 import (
 	"context"
 
-	"github.com/vmware/octant/internal/describer"
-	"github.com/vmware/octant/internal/portforward"
-	"github.com/vmware/octant/pkg/view/component"
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/vmware-tanzu/octant/internal/describer"
+	"github.com/vmware-tanzu/octant/internal/portforward"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // PortForwardListDescriber describes a list of port-forwards
@@ -24,21 +26,22 @@ func NewPortForwardListDescriber() *PortForwardListDescriber {
 var _ describer.Describer = (*PortForwardListDescriber)(nil)
 
 // Describe describes a list of port forwards as content
-func (d *PortForwardListDescriber) Describe(ctx context.Context, prefix, namespace string, options describer.Options) (component.ContentResponse, error) {
+func (d *PortForwardListDescriber) Describe(ctx context.Context, namespace string, options describer.Options) (component.ContentResponse, error) {
 	portForwarder := options.PortForwarder()
 
-	list := component.NewList("Port Forwards", nil)
+	title := component.Title(component.NewText("Port Forwards"))
+	list := component.NewList(title, nil)
 
 	tblCols := component.NewTableCols("Name", "Namespace", "Ports", "Age")
 	tbl := component.NewTable("Port Forwards", "There are no port forwards!", tblCols)
 	list.Add(tbl)
 
-	for _, pf := range portForwarder.List() {
+	for _, pf := range portForwarder.List(ctx) {
 		t := &pf.Target
 		apiVersion, kind := t.GVK.ToAPIVersionAndKind()
 		nameLink, err := options.Link.ForGVK(t.Namespace, apiVersion, kind, t.Name, t.Name)
 		if err != nil {
-			return describer.EmptyContentResponse, err
+			return component.EmptyContentResponse, err
 		}
 
 		pfRow := component.TableRow{
@@ -74,13 +77,7 @@ func describePortForwardPorts(pf portforward.State) []component.Port {
 		pfs.Port = int(p.Local)
 		pfs.IsForwarded = true
 
-		port := component.NewPort(
-			pf.Target.Namespace,
-			apiVersion,
-			kind,
-			pf.Target.Name,
-			int(p.Remote),
-			"TCP", pfs)
+		port := component.NewPort(pf.Target.Namespace, apiVersion, kind, pf.Target.Name, int(p.Remote), string(corev1.ProtocolTCP), pfs)
 		list = append(list, *port)
 	}
 	return list

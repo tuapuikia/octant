@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/install"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -25,9 +27,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/util/strings"
+	internalLog "github.com/vmware-tanzu/octant/internal/log"
+	clusterTypes "github.com/vmware-tanzu/octant/pkg/cluster"
+	"github.com/vmware-tanzu/octant/pkg/log"
 
 	// auth plugins
 	_ "k8s.io/client-go/plugin/pkg/client/auth/azure"
@@ -35,24 +39,28 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 )
 
-//go:generate mockgen -source=cluster.go -destination=./fake/mock_client_interface.go -package=fake github.com/vmware/octant/internal/cluster ClientInterface
-//go:generate mockgen -source=../../vendor/k8s.io/client-go/dynamic/dynamicinformer/interface.go -destination=./fake/mock_dynamicinformer.go -package=fake k8s.io/client-go/dynamic/dynamicinformer DynamicSharedInformerFactory
+//go:generate mockgen -source=cluster.go -destination=./fake/mock_client_interface.go -package=fake github.com/vmware-tanzu/octant/internal/cluster ClientInterface
+//go:generate mockgen -source=../../pkg/cluster/namespace.go -destination=./fake/mock_namespace_interface.go -package=fake github.com/vmware-tanzu/octant/pkg/cluster NamespaceInterface
+//go:generate mockgen -source=../../pkg/cluster/info.go -destination=./fake/mock_info_interface.go -package=fake github.com/vmware-tanzu/octant/pkg/cluster InfoInterface
 //go:generate mockgen -source=../../vendor/k8s.io/client-go/informers/generic.go -destination=./fake/mock_genericinformer.go -package=fake k8s.io/client-go/informers GenericInformer
-//go:generate mockgen -source=../../vendor/k8s.io/client-go/discovery/discovery_client.go -imports=openapi_v2=github.com/googleapis/gnostic/OpenAPIv2 -destination=./fake/mock_discoveryinterface.go -package=fake k8s.io/client-go/discovery DiscoveryInterface
+//go:generate mockgen -source=../../vendor/k8s.io/client-go/dynamic/dynamicinformer/interface.go -destination=./fake/mock_dynamicsharedinformerfactory.go -package=fake k8s.io/client-go/dynamic/dynamicinformer DynamicSharedInformerFactory
+//go:generate mockgen -source=../../vendor/k8s.io/client-go/discovery/discovery_client.go -imports=openapi_v2=github.com/googleapis/gnostic/openapiv2 -destination=./fake/mock_discoveryinterface.go -package=fake k8s.io/client-go/discovery DiscoveryInterface
 //go:generate mockgen -source=../../vendor/k8s.io/client-go/kubernetes/clientset.go -destination=./fake/mock_kubernetes_client.go -package=fake -mock_names=Interface=MockKubernetesInterface k8s.io/client-go/kubernetes Interface
 //go:generate mockgen -destination=./fake/mock_sharedindexinformer.go -package=fake k8s.io/client-go/tools/cache SharedIndexInformer
 //go:generate mockgen -destination=./fake/mock_authorization.go -package=fake k8s.io/client-go/kubernetes/typed/authorization/v1 AuthorizationV1Interface,SelfSubjectAccessReviewInterface,SelfSubjectAccessReviewsGetter,SelfSubjectRulesReviewInterface,SelfSubjectRulesReviewsGetter
-//go:generate mockgen -source=../../vendor/k8s.io/client-go/dynamic/interface.go -destination=./fake/mock_dynamic_client.go -package=fake -imports=github.com/vmware/octant/vendor/k8s.io/client-go/dynamic=k8s.io/client-go/dynamic -mock_names=Interface=MockDynamicInterface k8s.io/client-go/dynamic Interface
+//go:generate mockgen -source=../../vendor/k8s.io/client-go/dynamic/interface.go -destination=./fake/mock_dynamic_client.go -package=fake -imports=github.com/vmware-tanzu/octant/vendor/k8s.io/client-go/dynamic=k8s.io/client-go/dynamic -mock_names=Interface=MockDynamicInterface k8s.io/client-go/dynamic Interface
 
 // ClientInterface is a client for cluster operations.
 type ClientInterface interface {
+	DefaultNamespace() string
 	ResourceExists(schema.GroupVersionResource) bool
-	Resource(schema.GroupKind) (schema.GroupVersionResource, error)
+	Resource(schema.GroupKind) (schema.GroupVersionResource, bool, error)
+	ResetMapper()
 	KubernetesClient() (kubernetes.Interface, error)
 	DynamicClient() (dynamic.Interface, error)
 	DiscoveryClient() (discovery.DiscoveryInterface, error)
-	NamespaceClient() (NamespaceInterface, error)
-	InfoClient() (InfoInterface, error)
+	NamespaceClient() (clusterTypes.NamespaceInterface, error)
+	InfoClient() (clusterTypes.InfoInterface, error)
 	Close()
 	RESTInterface
 }
@@ -75,12 +83,19 @@ type Cluster struct {
 	restMapper *restmapper.DeferredDiscoveryRESTMapper
 
 	closeFn context.CancelFunc
+
+	defaultNamespace   string
+	providedNamespaces []string
 }
 
 var _ ClientInterface = (*Cluster)(nil)
 
-func newCluster(ctx context.Context, clientConfig clientcmd.ClientConfig, restClient *rest.Config) (*Cluster, error) {
-	logger := log.From(ctx).With("component", "cluster client")
+func newCluster(ctx context.Context, clientConfig clientcmd.ClientConfig, restClient *rest.Config, defaultNamespace string, providedNamespaces []string) (*Cluster, error) {
+	logger := internalLog.From(ctx).With("component", "cluster client")
+
+	install.Install(scheme.Scheme)
+	_ = admissionregistrationv1.AddToScheme(scheme.Scheme)
+	_ = apiregistrationv1.AddToScheme(scheme.Scheme)
 
 	kubernetesClient, err := kubernetes.NewForConfig(restClient)
 	if err != nil {
@@ -90,11 +105,6 @@ func newCluster(ctx context.Context, clientConfig clientcmd.ClientConfig, restCl
 	dynamicClient, err := dynamic.NewForConfig(restClient)
 	if err != nil {
 		return nil, errors.Wrap(err, "create dynamic client")
-	}
-
-	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restClient)
-	if err != nil {
-		return nil, errors.Wrap(err, "create discovery client")
 	}
 
 	dir, err := ioutil.TempDir("", "octant")
@@ -117,13 +127,15 @@ func newCluster(ctx context.Context, clientConfig clientcmd.ClientConfig, restCl
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(cachedDiscoveryClient)
 
 	c := &Cluster{
-		clientConfig:     clientConfig,
-		restConfig:       restClient,
-		kubernetesClient: kubernetesClient,
-		dynamicClient:    dynamicClient,
-		discoveryClient:  discoveryClient,
-		restMapper:       restMapper,
-		logger:           log.From(ctx),
+		clientConfig:       clientConfig,
+		restConfig:         restClient,
+		kubernetesClient:   kubernetesClient,
+		dynamicClient:      dynamicClient,
+		discoveryClient:    cachedDiscoveryClient,
+		restMapper:         restMapper,
+		logger:             internalLog.From(ctx),
+		defaultNamespace:   defaultNamespace,
+		providedNamespaces: providedNamespaces,
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -147,19 +159,26 @@ func (c *Cluster) Close() {
 	}
 }
 
+func (c *Cluster) DefaultNamespace() string {
+	return c.defaultNamespace
+}
+
 func (c *Cluster) ResourceExists(gvr schema.GroupVersionResource) bool {
 	restMapper := c.restMapper
 	_, err := restMapper.KindFor(gvr)
 	return err == nil
 }
 
-func (c *Cluster) Resource(gk schema.GroupKind) (schema.GroupVersionResource, error) {
+func (c *Cluster) Resource(gk schema.GroupKind) (schema.GroupVersionResource, bool, error) {
 	restMapping, err := c.restMapper.RESTMapping(gk)
 	if err != nil {
-		return schema.GroupVersionResource{}, err
+		return schema.GroupVersionResource{}, false, err
 	}
+	return restMapping.Resource, restMapping.Scope.Name() == meta.RESTScopeNameNamespace, nil
+}
 
-	return restMapping.Resource, nil
+func (c *Cluster) ResetMapper() {
+	c.restMapper.Reset()
 }
 
 // KubernetesClient returns a Kubernetes client.
@@ -168,7 +187,12 @@ func (c *Cluster) KubernetesClient() (kubernetes.Interface, error) {
 }
 
 // NamespaceClient returns a namespace client.
-func (c *Cluster) NamespaceClient() (NamespaceInterface, error) {
+func (c *Cluster) NamespaceClient() (clusterTypes.NamespaceInterface, error) {
+	rc, err := c.RESTClient()
+	if err != nil {
+		return nil, err
+	}
+
 	dc, err := c.DynamicClient()
 	if err != nil {
 		return nil, err
@@ -178,7 +202,7 @@ func (c *Cluster) NamespaceClient() (NamespaceInterface, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "resolving initial namespace")
 	}
-	return newNamespaceClient(dc, ns), nil
+	return newNamespaceClient(dc, rc, ns, c.providedNamespaces), nil
 }
 
 // DynamicClient returns a dynamic client.
@@ -192,7 +216,7 @@ func (c *Cluster) DiscoveryClient() (discovery.DiscoveryInterface, error) {
 }
 
 // InfoClient returns an InfoClient for the cluster.
-func (c *Cluster) InfoClient() (InfoInterface, error) {
+func (c *Cluster) InfoClient() (clusterTypes.InfoInterface, error) {
 	return newClusterInfo(c.clientConfig), nil
 }
 
@@ -219,31 +243,85 @@ func (c *Cluster) Version() (string, error) {
 	return fmt.Sprint(serverVersion), nil
 }
 
-// FromKubeConfig creates a Cluster from a kubeConfig.
-func FromKubeConfig(ctx context.Context, kubeConfig, contextName string, options RESTConfigOptions) (*Cluster, error) {
-	chain := strings.Deduplicate(filepath.SplitList(kubeConfig))
+type clusterOptions struct {
+	InitialNamespace   string
+	ProvidedNamespaces []string
+	RESTConfigOptions  RESTConfigOptions
+}
 
-	rules := &clientcmd.ClientConfigLoadingRules{
-		Precedence: chain,
-	}
+type ClusterOption func(*clusterOptions)
 
-	overrides := &clientcmd.ConfigOverrides{}
-	if contextName != "" {
-		overrides.CurrentContext = contextName
+func WithInitialNamespace(initialNamespace string) ClusterOption {
+	return func(clusterOptions *clusterOptions) {
+		clusterOptions.InitialNamespace = initialNamespace
 	}
-	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
-	config, err := cc.ClientConfig()
+}
+
+func WithProvidedNamespaces(providedNamespaces []string) ClusterOption {
+	return func(clusterOptions *clusterOptions) {
+		clusterOptions.ProvidedNamespaces = providedNamespaces
+	}
+}
+
+func WithClientQPS(qps float32) ClusterOption {
+	return func(clusterOptions *clusterOptions) {
+		clusterOptions.RESTConfigOptions.QPS = qps
+	}
+}
+
+func WithClientBurst(burst int) ClusterOption {
+	return func(clusterOptions *clusterOptions) {
+		clusterOptions.RESTConfigOptions.Burst = burst
+	}
+}
+
+func WithClientUserAgent(userAgent string) ClusterOption {
+	return func(clusterOptions *clusterOptions) {
+		clusterOptions.RESTConfigOptions.UserAgent = userAgent
+	}
+}
+
+func WithRESTConfigOptions(restConfigOptions RESTConfigOptions) ClusterOption {
+	return func(clusterOptions *clusterOptions) {
+		clusterOptions.RESTConfigOptions = restConfigOptions
+	}
+}
+
+// FromClientConfig creates a Cluster from a k8s.io/client-go ClientConfig
+func FromClientConfig(
+	ctx context.Context,
+	clientConfig clientcmd.ClientConfig,
+	opts ...ClusterOption,
+) (*Cluster, error) {
+	options := clusterOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	restConfig, err := clientConfig.ClientConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	logger := log.From(ctx)
-	logger.With("client-qps", options.QPS, "client-burst", options.Burst).
+	var defaultNamespace string
+
+	if options.InitialNamespace == "" {
+		defaultNamespace, _, err = clientConfig.Namespace()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		defaultNamespace = options.InitialNamespace
+	}
+
+	logger := internalLog.From(ctx)
+	logger.With("client-qps", options.RESTConfigOptions.QPS, "client-burst", options.RESTConfigOptions.Burst).
 		Debugf("initializing REST client configuration")
 
-	config = withConfigDefaults(config, options)
+	restConfig = withConfigDefaults(restConfig, options.RESTConfigOptions)
 
-	return newCluster(ctx, cc, config)
+	return newCluster(ctx, clientConfig, restConfig, defaultNamespace, options.ProvidedNamespaces)
 }
 
 // withConfigDefaults returns an extended rest.Config object with additional defaults applied
@@ -260,10 +338,15 @@ func withConfigDefaults(inConfig *rest.Config, options RESTConfigOptions) *rest.
 	codec := runtime.NoopEncoder{Decoder: scheme.Codecs.UniversalDecoder()}
 	config.NegotiatedSerializer = serializer.NegotiatedSerializerWrapper(runtime.SerializerInfo{Serializer: codec})
 
+	if options.UserAgent != "" {
+		config.UserAgent = options.UserAgent
+	}
+
 	return config
 }
 
 type RESTConfigOptions struct {
-	QPS   float32
-	Burst int
+	QPS       float32
+	Burst     int
+	UserAgent string
 }

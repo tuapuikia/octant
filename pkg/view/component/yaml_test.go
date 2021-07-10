@@ -1,15 +1,16 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"path"
 	"testing"
+
+	"github.com/vmware-tanzu/octant/internal/util/json"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func Test_YAML_Marshal(t *testing.T) {
 				Config: YAMLConfig{
 					Data: "---\nfoo: bar",
 				},
-				base: newBase(typeYAML, nil),
+				Base: newBase(TypeYAML, nil),
 			},
 			expectedPath: "yaml1.json",
 		},

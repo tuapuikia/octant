@@ -1,0 +1,22 @@
+<div class="editor-container">
+  <div class="editor">
+    <ngx-monaco-editor
+      [(ngModel)]="value"
+      [options]="options"
+      [attr.modelUri]="uri"
+    ></ngx-monaco-editor>
+  </div>
+
+  <div class="controls">
+    <div class="select-wrapper">
+      <app-view-select-file  *ngIf="!metadata" [view]= "selectFileView" (fileChanged)="inputFileChanged($event)"></app-view-select-file>
+    </div>
+    <cds-button size="sm" action="outline" (click)="reset()" [disabled]="!isModified" >
+      Reset
+    </cds-button>
+    <cds-button size="sm" action="outline" (click)="submit()" [disabled]="isUpdateEnabled()"
+    >
+      {{ submitLabel }}
+    </cds-button>
+  </div>
+</div>

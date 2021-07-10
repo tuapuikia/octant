@@ -17,32 +17,23 @@ rice-box.go
 
 /build
 /dist
-
-# generated fakes
-internal/api/fake
-internal/cluster/fake
-internal/cache/fake
-internal/octant/fake
-internal/config/fake
-internal/event/fake
-internal/kubeconfig/fake
-internal/link/fake
-internal/module/fake
-internal/queryer/fake
-internal/modules/overview/printer/fake
-internal/modules/overview/resourceviewer/fake
-internal/modules/overview/objectvisitor/fake
-internal/portforward/fake
-/pkg/store/fake
-/pkg/plugin/fake
-/pkg/plugin/api/fake
-/pkg/plugin/service/fake
-
+/node_modules
 
 # electron bundling
 /output
+/cmd/octant-electron/output
+/cmd/octant-electron/bind*.go
+/cmd/octant-electron/windows.syso
 
 .vscode
 .idea
 
 /tmp
+
+gomock_reflect_*
+
+# mac
+.DS_Store
+
+# vim undo files
+*.un~

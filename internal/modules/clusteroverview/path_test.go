@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -14,10 +14,10 @@ import (
 )
 
 func Test_crdPath(t *testing.T) {
-	got, err := crdPath("namespace", "crdName", "name")
+	got, err := crdPath("namespace", "crdName", "version", "name")
 	require.NoError(t, err)
 
-	expected := path.Join("/content", "cluster-overview", "custom-resources", "crdName", "name")
+	expected := path.Join("/cluster-overview", "custom-resources", "crdName", "version", "name")
 	assert.Equal(t, expected, got)
 }
 
@@ -35,14 +35,14 @@ func Test_gvk_path(t *testing.T) {
 			apiVersion: rbacAPIVersion,
 			kind:       "ClusterRole",
 			objectName: "cluster-role",
-			expected:   path.Join("/content", "cluster-overview", "rbac", "cluster-roles", "cluster-role"),
+			expected:   path.Join("/cluster-overview", "rbac", "cluster-roles", "cluster-role"),
 		},
 		{
 			name:       "ClusterRoleBinding",
 			apiVersion: rbacAPIVersion,
 			kind:       "ClusterRoleBinding",
 			objectName: "cluster-role-binding",
-			expected:   path.Join("/content", "cluster-overview", "rbac", "cluster-role-bindings", "cluster-role-binding"),
+			expected:   path.Join("/cluster-overview", "rbac", "cluster-role-bindings", "cluster-role-binding"),
 		},
 		{
 			name:       "unknown",
